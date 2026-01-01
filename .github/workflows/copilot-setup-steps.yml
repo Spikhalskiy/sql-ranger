@@ -1,0 +1,65 @@
+name: "Copilot Setup Steps"
+
+# Automatically run the setup steps when they are changed to allow for easy validation, and
+# allow manual testing through the repository's "Actions" tab
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    # Set the permissions to the lowest permissions possible needed for your steps.
+    # Copilot will be given its own token for its operations.
+    permissions:
+      # If you want to clone the repository as part of your setup steps, for example to install dependencies, you'll need the `contents: read` permission. If you don't clone the repository in your setup steps, Copilot will do this for you automatically after the steps complete.
+      contents: read
+
+    # You can define any steps you want, and they will run before the agent starts.
+    # If you do not check out your code, Copilot will do this for you.
+    steps:
+      - name: Set up Node.js for custom local MCP servers
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: 3.13.9
+          channels: conda-forge
+
+      - name: apt-get install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make
+
+      - name: Cache Conda env
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CONDA }}/envs
+          key:
+            conda-${{ runner.os }}--${{ runner.arch }}--${{
+            steps.get-date.outputs.today }}-${{
+            hashFiles('**/poetry.lock') }}-${{ env.CACHE_NUMBER
+            }}
+        env:
+          # Increase this value to reset cache if **/poetry.lock has not changed
+          CACHE_NUMBER: 0
+        id: cache
+
+      - name: Create conda environment and install dependencies
+        run: |
+          make env-create
+        if: steps.cache.outputs.cache-hit != 'true'
+

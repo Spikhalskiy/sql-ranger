@@ -1,0 +1,6 @@
+name: sql-ranger
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10.19
+  - poetry=2.2.1
