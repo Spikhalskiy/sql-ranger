@@ -174,26 +174,30 @@ class TestPartitionChecker:
 
         assert len(results) == 0  # No violations
 
-    def test_custom_partitioned_tables(self):
-        """Test with custom list of partitioned tables."""
-        sql = "SELECT * FROM order_events WHERE other_col = 1"
-        checker = PartitionChecker(partitioned_tables=[PartitionColumn("order_events", "day")])
+        sql = """
+              SELECT a.day, b.product_name
+              FROM gridhive.fact.sales_history a
+                       JOIN gridhive.dim.products b ON a.product_id = b.id
+              WHERE b.day = '2021-09-13' \
+              """
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
         assert results[0].violation == PartitionCheckViolation.MISSING_DAY_FILTER
-        assert results[0].table_name == "order_events"
+        assert results[0].table_name == "sales_history"
 
     def test_case_insensitive_table_names(self):
         """Test that table name matching is case-insensitive."""
         sql = """
         SELECT * FROM gridhive.fact.SALES_HISTORY
-        WHERE day = '2021-09-13'
         """
         checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
-        assert len(results) == 0  # No violations
+        assert len(results) == 1
+        assert results[0].violation == PartitionCheckViolation.MISSING_DAY_FILTER
+        assert results[0].table_name == "sales_history"
 
     def test_invalid_sql_incomplete_query(self):
         """Test that incomplete SQL returns QUERY_INVALID_SYNTAX violation."""
@@ -207,13 +211,13 @@ class TestPartitionChecker:
         assert results[0].table_name is None
         assert results[0].estimated_days is None
 
-    def test_cte_with_day_filter(self):
+    def test_cte(self):
         """Test query with CTE containing day filter."""
         sql = """
         WITH daily_totals AS (
             SELECT sum(quantity) as total_qty
             FROM gridhive.fact.sales_history
-            WHERE day = '2025-12-01' and hour='09'
+            WHERE day = '2025-12-01'
         )
         SELECT * FROM daily_totals
         """
@@ -222,6 +226,24 @@ class TestPartitionChecker:
 
         assert len(results) == 0  # No violations
 
+        sql = """
+        WITH daily_totals AS (
+            SELECT day, sum(quantity) as total_qty
+            FROM gridhive.fact.sales_history
+            WHERE day = '2025-12-01'
+        ),
+        daily_totals_rev AS (
+            SELECT sum(revenue) as total_qty
+            FROM gridhive.fact.sales_history
+        )
+        SELECT * FROM daily_totals a join daily_totals_rev b on a.daily_totals = b.daily_totals_rev \
+        """
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
+        results = checker.check_query(sql)
+
+        assert len(results) == 1
+        assert results[0].violation == PartitionCheckViolation.MISSING_DAY_FILTER
+        assert results[0].table_name == "sales_history"
 
 class TestDateRangeEstimation:
     """Test suite for date range estimation functionality."""
@@ -398,6 +420,41 @@ class TestDateRangeEstimation:
         # Should still detect as valid since we check both sides
         assert results[0].violation == PartitionCheckViolation.MISSING_DAY_FILTER
 
+    def test_union_adjacent_multi_month_ranges_excessive(self):
+        """Test UNION where each SELECT has an adjacent multi-month BETWEEN range that exceeds max days."""
+        sql = """
+        SELECT * FROM gridhive.fact.sales_history
+        WHERE day BETWEEN '2021-01-01' AND '2021-02-01'
+        UNION ALL
+        SELECT * FROM gridhive.fact.sales_history
+        WHERE day BETWEEN '2021-02-02' AND '2021-03-05'
+        """
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=30)
+        ])
+        results = checker.check_query(sql)
+
+        # Each part covers more than 30 days individually (first: 32 days), so should flag excessive range
+        assert len(results) == 2
+        for violation in results:
+            assert violation.violation == PartitionCheckViolation.EXCESSIVE_DATE_RANGE
+            assert violation.estimated_days is not None
+            assert violation.estimated_days > 30
+
+        sql = """
+        SELECT * FROM gridhive.fact.sales_history
+        WHERE day BETWEEN '2021-01-01' AND '2021-01-18'
+        UNION ALL
+        SELECT * FROM gridhive.fact.sales_history
+        WHERE day BETWEEN '2021-01-19' AND '2021-02-05'
+        """
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=30)
+        ])
+        results = checker.check_query(sql)
+
+        # Each part doesn't span more than allowed, should not flag excessive range
+        assert len(results) == 0
 
 class TestPartitionCheckerWithPartitionColumn:
     """Test suite for PartitionChecker with PartitionColumn API."""

@@ -20,7 +20,7 @@ class PartitionColumn:
         Initialize the PartitionColumn.
 
         Args:
-            table_name: Full table name (e.g., 'warehouse.fact.sales_history').
+            table_name: Full table name (e.g., 'gridhive.fact.sales_history').
             column_name: Name of the partition column (e.g., 'day').
         """
         self.table_name = table_name
@@ -34,7 +34,7 @@ class PartitionColumn:
             Short table name without schema/catalog prefix.
 
         Example:
-            >>> pc = PartitionColumn('warehouse.fact.sales_history', 'day')
+            >>> pc = PartitionColumn('gridhive.fact.sales_history', 'day')
             >>> pc.get_nonqualified_table_name()
             'sales_history'
         """
@@ -55,7 +55,7 @@ class DatePartitionColumn(PartitionColumn):
         Initialize the DatePartitionColumn.
 
         Args:
-            table_name: Full table name (e.g., 'warehouse.fact.sales_history').
+            table_name: Full table name (e.g., 'gridhive.fact.sales_history').
             column_name: Name of the partition column (e.g., 'day').
             date_pattern: Date format pattern (e.g., 'YYYY-MM-dd').
             max_date_range_days: Maximum allowed date range in days. If None, range is not checked.
@@ -144,9 +144,8 @@ class PartitionChecker:
         for table_name in tables:
             if table_name.lower() in self._partition_configs:
                 partition_config = self._partition_configs[table_name.lower()]
-                result = self._check_table_partition(parsed, table_name, partition_config)
-                if result is not None:  # Only add violations
-                    violations.append(result)
+                result = self._check_table_partition_hierarchically(parsed, table_name, partition_config)
+                violations += result
 
         return violations
 
@@ -166,24 +165,24 @@ class PartitionChecker:
                 tables.add(table.name)
         return tables
 
-    def _check_table_partition(
-        self, parsed: exp.Expression, table_name: str, partition_config: PartitionColumn
+    def _check_table_partition_in_specific_sql(
+            self, select_sql: exp.Expression, partition_config: PartitionColumn
     ) -> PartitionCheckResult | None:
         """
-        Check partition requirements for a specific table.
+        Check partition requirements for a specific table referenced in the FROM clause of the SQL query.
 
         Args:
-            parsed: Parsed SQL expression.
-            table_name: Name of the table to check.
+            select_sql: Parsed SQL expression.
             partition_config: PartitionColumn configuration for the table.
 
         Returns:
             PartitionCheckResult with violation details if validation fails, None if valid.
         """
         column_name = partition_config.column_name
+        table_name = partition_config.get_nonqualified_table_name()
 
         # Find all WHERE clauses in the query
-        where_clauses = list(parsed.find_all(exp.Where))
+        where_clauses = list(select_sql.find_all(exp.Where))
 
         if not where_clauses:
             return PartitionCheckResult(
@@ -244,8 +243,37 @@ class PartitionChecker:
                     estimated_days=estimated_days,
                 )
 
-        # No violations found - return None
         return None
+
+    def _check_table_partition_hierarchically(
+        self, select_sql: exp.Expression, table_name: str, partition_config: PartitionColumn
+    ) -> list[PartitionCheckResult]:
+        """
+        Check partition requirements for a specific table in the specific SQL query.
+
+        Args:
+            select_sql: Parsed SQL expression.
+            table_name: Name of the table to check.
+            partition_config: PartitionColumn configuration for the table.
+
+        Returns:
+            List of PartitionCheckResult with violation details if validation fails, empty if valid.
+        """
+        results = []
+        from_clauses = filter(
+            lambda from_clause: isinstance(from_clause.this, exp.Table)
+            and from_clause.this.name
+            and from_clause.this.name.lower() == table_name.lower(),
+            select_sql.find_all(exp.From),
+        )
+        for from_clause in from_clauses:
+            check_result = self._check_table_partition_in_specific_sql(from_clause.parent_select, partition_config)
+            if check_result is not None:
+                results.append(check_result)
+
+
+        # No violations found - return empty list
+        return results
 
     def _extract_partition_conditions(
         self, where: exp.Where, table_name: str, column_name: str
@@ -502,7 +530,7 @@ def check_partition_usage(
     Example:
         >>> from sqlranger import PartitionColumn
         >>> results = check_partition_usage(
-        ...     "SELECT * FROM warehouse.fact.sales_history WHERE day = '2021-09-13'",
+        ...     "SELECT * FROM gridhive.fact.sales_history WHERE day = '2021-09-13'",
         ...     [PartitionColumn("sales_history", "day")]
         ... )
         >>> len(results)  # Empty list means no violations
