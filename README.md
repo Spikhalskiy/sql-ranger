@@ -1,5 +1,3 @@
-
-
 # <img width="128" height="128" alt="ChatGPT_Image_Jan_1__2026__09_22_31_PM-removebg-preview" src="https://github.com/user-attachments/assets/a9798dac-1a1a-4a71-962b-e00be346d0aa" /> SQL Ranger
 
 Enforcer of finite-range partitioning checks presence in SQL Queries.
@@ -16,7 +14,7 @@ Intended usages that drive the development of this project:
 
 ## Partition Usage Validation
 
-The `PartitionChecker` validates SQL queries to ensure they properly use partitioning on large tables. This is critical for query performance, as some tables (like `mpcdsplogevent` and `logevent`) are partitioned by day and hour.
+The `PartitionChecker` validates SQL queries to ensure they properly use partitioning on large tables. 
 
 ### Why Partition Validation?
 
@@ -27,7 +25,15 @@ Large partitioned tables should always be queried with partition filters to:
 
 ### Usage
 
+#### Installation
+
+```bash
+pip install sqlranger==0.0.2
+```
+
 #### Basic Validation
+
+To ensure explicit partition filtering on a `sales_history` table partitioned by the `day` column:
 
 ```python
 from sqlranger import check_partition_usage, PartitionColumn, PartitionViolationType
@@ -50,36 +56,7 @@ else:
         print(f"✗ {violation.message}")
 ```
 
-#### Advanced Configuration with PartitionColumn
-
-For more control over partition configuration, use `PartitionColumn` and `DatePartitionColumn`:
-
-```python
-from sqlranger import PartitionChecker, PartitionColumn, DatePartitionColumn, PartitionViolationType
-
-# Configure partition columns with custom column names
-partition_cols = [
-    PartitionColumn("gridhive.fact.sales_history", "day"),
-    PartitionColumn("events.log_table", "event_date"),
-]
-
-checker = PartitionChecker(partitioned_tables=partition_cols)
-
-sql = """
-    SELECT event_date, COUNT(*) as total
-    FROM events.log_table
-    WHERE event_date BETWEEN '2021-09-13' AND '2021-09-26'
-"""
-
-violations = checker.find_violations(sql)
-if not violations:
-    print("✓ All partitioned tables have proper filtering")
-else:
-    for violation in violations:
-        print(f"✗ {violation.violation.value}: {violation.message}")
-```
-
-#### Per-Table Date Range Limits
+#### Date Range Limits
 
 Use `DatePartitionColumn` to enforce different maximum date ranges for different tables:
 
@@ -126,22 +103,6 @@ violations = checker.find_violations(sql)
 - The full table name (including schema/catalog if applicable)
 - The partition column name
 
-**Key Methods:**
-- `get_nonqualified_table_name()`: Extracts the short table name (after the last dot)
-
-**Example:**
-```python
-from sql_ranger import PartitionColumn
-
-# Simple table name
-pc1 = PartitionColumn("sales_history", "day")
-print(pc1.get_nonqualified_table_name())  # Output: "sales_history"
-
-# Fully qualified table name
-pc2 = PartitionColumn("gridhive.fact.sales_history", "event_date")
-print(pc2.get_nonqualified_table_name())  # Output: "sales_history"
-```
-
 #### DatePartitionColumn
 
 `DatePartitionColumn` extends `PartitionColumn` with additional date-specific configuration:
@@ -173,13 +134,7 @@ The partition checker enforces these rules:
     - Both `column >= 'start'` AND `column <= 'end'`
 4. **Optional Max Range**: When `max_date_range_days` is configured (via `DatePartitionColumn`), it enforces a maximum date range (best-effort estimation)
 
-### Return Values
-
-The validation functions return a list of `PartitionViolation` objects:
-- **Empty list**: All partitioned tables are properly filtered (no violations)
-- **Non-empty list**: Contains violation details for each table that fails validation
-
-### Violation Types
+#### PartitionViolationType
 
 | Violation | Description |
 |--------|-------------|
@@ -187,6 +142,20 @@ The validation functions return a list of `PartitionViolation` objects:
 | `DAY_FILTER_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
 | `NO_FINITE_RANGE` | Query doesn't define a finite date range |
 | `EXCESSIVE_DATE_RANGE` | Date range exceeds the configured maximum |
+
+#### PartitionViolation
+
+`find_violations` returns a list of `PartitionViolation` objects, each containing:
+- `violation`: Type of violation, see `PartitionViolationType` enum
+- `message`: Human-or-LLM-readable description of the violation
+- `table_name`: Name of the table with the violation
+- `estimated_days`: Estimated number of days in the date range for `EXCESSIVE_DATE_RANGE` violation type
+
+### Return Values
+
+The validation functions return a list of `PartitionViolation` objects:
+- **Empty list**: All partitioned tables are properly filtered (no violations)
+- **Non-empty list**: Contains violation details for each table that fails validation
 
 ### Example Validation Results
 
