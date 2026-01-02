@@ -27,65 +27,186 @@ Large partitioned tables should always be queried with partition filters to:
 
 ### Usage
 
-```python
-from sql_ranger import check_partition_usage, PartitionCheckStatus
+#### Basic Validation
 
-# Simple validation
+```python
+from sqlranger import check_partition_usage, PartitionColumn, PartitionCheckViolation
+
+# Basic validation with PartitionColumn
 sql = """
     SELECT day, count(*) AS total
     FROM gridhive.fact.sales_history
     WHERE day = '2021-09-13'
 """
-results = check_partition_usage(sql, partitioned_tables=["sales_history"])
+violations = check_partition_usage(
+    sql,
+    partitioned_tables=[PartitionColumn("sales_history", "day")]
+)
 
-for result in results:
-    if result.status == PartitionCheckStatus.VALID:
-        print(f"✓ {result.message}")
-    else:
-        print(f"✗ {result.message}")
+if not violations:
+    print("✓ All partitioned tables have proper filtering")
+else:
+    for violation in violations:
+        print(f"✗ {violation.message}")
+```
+
+#### Advanced Configuration with PartitionColumn
+
+For more control over partition configuration, use `PartitionColumn` and `DatePartitionColumn`:
+
+```python
+from sqlranger import PartitionChecker, PartitionColumn, DatePartitionColumn, PartitionCheckViolation
+
+# Configure partition columns with custom column names
+partition_cols = [
+    PartitionColumn("warehouse.fact.sales_history", "day"),
+    PartitionColumn("events.log_table", "event_date"),
+]
+
+checker = PartitionChecker(partitioned_tables=partition_cols)
+
+sql = """
+    SELECT event_date, COUNT(*) as total
+    FROM events.log_table
+    WHERE event_date BETWEEN '2021-09-13' AND '2021-09-26'
+"""
+
+violations = checker.check_query(sql)
+if not violations:
+    print("✓ All partitioned tables have proper filtering")
+else:
+    for violation in violations:
+        print(f"✗ {violation.violation.value}: {violation.message}")
+```
+
+#### Per-Table Date Range Limits
+
+Use `DatePartitionColumn` to enforce different maximum date ranges for different tables:
+
+```python
+from sql_ranger import PartitionChecker, DatePartitionColumn
+
+# Configure different max date ranges per table
+partition_cols = [
+    DatePartitionColumn(
+        "warehouse.fact.sales_history",
+        "day",
+        "YYYY-mm-dd",
+        max_date_range_days=30
+    ),
+    DatePartitionColumn(
+        "events.log_table",
+        "event_time",
+        "YYYY-MM-dd",
+        max_date_range_days=7
+    ),
+]
+
+checker = PartitionChecker(partitioned_tables=partition_cols)
+
+# This query will have a violation for log_table (15 days > 7 max)
+# but not for sales_history (15 days <= 30 max)
+sql = """
+    SELECT a.day, b.event_time
+    FROM warehouse.fact.sales_history a
+    JOIN events.log_table b ON a.day = b.event_time
+    WHERE a.day BETWEEN '2021-09-01' AND '2021-09-15'
+      AND b.event_time BETWEEN '2021-09-01' AND '2021-09-15'
+"""
+
+violations = checker.check_query(sql)
+# violations will contain one entry for log_table only
+```
+
+### Configuration Classes
+
+#### PartitionColumn
+
+`PartitionColumn` is the base class for defining partition configuration. It specifies:
+- The full table name (including schema/catalog if applicable)
+- The partition column name
+
+**Key Methods:**
+- `get_nonqualified_table_name()`: Extracts the short table name (after the last dot)
+
+**Example:**
+```python
+from sql_ranger import PartitionColumn
+
+# Simple table name
+pc1 = PartitionColumn("sales_history", "day")
+print(pc1.get_nonqualified_table_name())  # Output: "sales_history"
+
+# Fully qualified table name
+pc2 = PartitionColumn("warehouse.fact.sales_history", "event_date")
+print(pc2.get_nonqualified_table_name())  # Output: "sales_history"
+```
+
+#### DatePartitionColumn
+
+`DatePartitionColumn` extends `PartitionColumn` with additional date-specific configuration:
+- `date_pattern`: String describing the date format (e.g., "YYYY-mm-dd")
+- `max_date_range_days`: Optional maximum allowed date range for this specific table
+
+**Example:**
+```python
+from sql_ranger import DatePartitionColumn
+
+# Configure a table with 30-day max range
+dpc = DatePartitionColumn(
+    "warehouse.fact.sales_history",
+    "day",
+    "YYYY-MM-dd",
+    max_date_range_days=30
+)
 ```
 
 ### Validation Rules
 
 The partition checker enforces these rules:
 
-1. **Day Filter Required**: Any query using a partitioned table must include a `day` column filter in the WHERE clause
-2. **Raw Column Only**: The `day` column must be used without functions (e.g., `day = '2021-09-13'` is OK, but `DATE_FORMAT(day, '%Y-%m')` breaks partitioning)
+1. **Partition Filter Required**: Any query using a partitioned table must include a partition column filter in the WHERE clause (by default `day`, but configurable via `PartitionColumn`)
+2. **Raw Column Only**: The partition column must be used without functions (e.g., `day = '2021-09-13'` is OK, but `DATE_FORMAT(day, '%Y-%m')` breaks partitioning)
 3. **Finite Range**: Queries must define a finite date range using:
-    - `day = 'date'` (single date)
-    - `day BETWEEN 'start' AND 'end'`
-    - Both `day >= 'start'` AND `day <= 'end'`
-4. **Optional Max Range**: When `max_days` is configured, it enforces a maximum date range (best-effort estimation)
+    - `column = 'date'` (single date)
+    - `column BETWEEN 'start' AND 'end'`
+    - Both `column >= 'start'` AND `column <= 'end'`
+4. **Optional Max Range**: When `max_date_range_days` is configured (via `DatePartitionColumn`), it enforces a maximum date range (best-effort estimation)
 
-### Result Status Types
+### Return Values
 
-| Status | Description |
+The validation functions return a list of `PartitionCheckResult` objects:
+- **Empty list**: All partitioned tables are properly filtered (no violations)
+- **Non-empty list**: Contains violation details for each table that fails validation
+
+### Violation Types
+
+| Violation | Description |
 |--------|-------------|
-| `VALID` | Query properly uses partitioning |
-| `MISSING_DAY_FILTER` | Query doesn't have a `day` filter in the `WHERE` clause |
-| `DAY_FILTER_WITH_FUNCTION` | Day column is wrapped in a function (breaks partitioning) |
+| `MISSING_DAY_FILTER` | Query doesn't have a partition column filter in the `WHERE` clause |
+| `DAY_FILTER_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
 | `NO_FINITE_RANGE` | Query doesn't define a finite date range |
 | `EXCESSIVE_DATE_RANGE` | Date range exceeds the configured maximum |
 
 ### Example Validation Results
 
-**Valid Query:**
+**Valid Query (no violations returned):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
 WHERE day BETWEEN '2021-09-13' AND '2021-09-26'
 ```
-✓ Table 'sales_history' has proper partition filtering
+Returns: `[]` (empty list - no violations)
 
 **Invalid Query (function on day):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
 WHERE DATE_FORMAT(day, '%Y-%m') = '2021-09'
 ```
-✗ Table 'sales_history' uses 'day' column with a function, which disallows partitioning in some systems.
+Returns violation: `DAY_FILTER_WITH_FUNCTION` - Table 'sales_history' uses 'day' column with a function, which disables partitioning.
 
 **Invalid Query (no upper bound):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
 WHERE day >= '2021-09-13'
 ```
-✗ Table 'sales_history' does not have a finite date range
+Returns violation: `NO_FINITE_RANGE` - Table 'sales_history' does not have a finite date range
