@@ -72,6 +72,7 @@ class PartitionCheckViolation(Enum):
     DAY_FILTER_WITH_FUNCTION = "DAY_FILTER_WITH_FUNCTION"
     NO_FINITE_RANGE = "NO_FINITE_RANGE"
     EXCESSIVE_DATE_RANGE = "EXCESSIVE_DATE_RANGE"
+    QUERY_INVALID_SYNTAX = "QUERY_INVALID_SYNTAX"
 
 
 @dataclass
@@ -121,13 +122,21 @@ class PartitionChecker:
 
         Returns:
             List of PartitionCheckResult objects for tables with violations.
-            Empty list if all partitioned tables are properly filtered or if query is invalid.
+            Empty list if all partitioned tables are properly filtered.
+            Returns a list with QUERY_INVALID_SYNTAX violation if query parsing fails.
         """
         try:
             parsed = sqlglot.parse_one(sql, dialect="trino")
-        except Exception:
-            # If parsing fails, return empty list
-            return []
+        except Exception as e:
+            # If parsing fails, return QUERY_INVALID_SYNTAX violation
+            return [
+                PartitionCheckResult(
+                    violation=PartitionCheckViolation.QUERY_INVALID_SYNTAX,
+                    message=f"Failed to parse SQL query: {e!s}",
+                    table_name=None,
+                    estimated_days=None,
+                )
+            ]
 
         violations = []
         tables = self._extract_tables(parsed)
@@ -487,7 +496,8 @@ def check_partition_usage(
 
     Returns:
         List of PartitionCheckResult objects for tables with violations.
-        Empty list if all partitioned tables are properly filtered or if query is invalid.
+        Empty list if all partitioned tables are properly filtered.
+        Returns a list with QUERY_INVALID_SYNTAX violation if query parsing fails.
 
     Example:
         >>> from sqlranger import PartitionColumn
