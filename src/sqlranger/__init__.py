@@ -3,7 +3,7 @@ from .checker import (
     DatePartitionColumn,
     PartitionChecker,
     PartitionCheckResult,
-    PartitionCheckStatus,
+    PartitionCheckViolation,
     PartitionColumn,
     check_partition_usage,
 )
@@ -11,7 +11,7 @@ from .checker import (
 __all__ = [
     "DatePartitionColumn",
     "PartitionCheckResult",
-    "PartitionCheckStatus",
+    "PartitionCheckViolation",
     "PartitionChecker",
     "PartitionColumn",
     "check_partition_usage",

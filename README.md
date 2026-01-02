@@ -30,7 +30,7 @@ Large partitioned tables should always be queried with partition filters to:
 #### Basic Validation
 
 ```python
-from sql_ranger import check_partition_usage, PartitionColumn, PartitionCheckStatus
+from sqlranger import check_partition_usage, PartitionColumn, PartitionCheckViolation
 
 # Basic validation with PartitionColumn
 sql = """
@@ -38,16 +38,16 @@ sql = """
     FROM gridhive.fact.sales_history
     WHERE day = '2021-09-13'
 """
-results = check_partition_usage(
+violations = check_partition_usage(
     sql,
     partitioned_tables=[PartitionColumn("sales_history", "day")]
 )
 
-for result in results:
-    if result.status == PartitionCheckStatus.VALID:
-        print(f"✓ {result.message}")
-    else:
-        print(f"✗ {result.message}")
+if not violations:
+    print("✓ All partitioned tables have proper filtering")
+else:
+    for violation in violations:
+        print(f"✗ {violation.message}")
 ```
 
 #### Advanced Configuration with PartitionColumn
@@ -55,7 +55,7 @@ for result in results:
 For more control over partition configuration, use `PartitionColumn` and `DatePartitionColumn`:
 
 ```python
-from sql_ranger import PartitionChecker, PartitionColumn, DatePartitionColumn, PartitionCheckStatus
+from sqlranger import PartitionChecker, PartitionColumn, DatePartitionColumn, PartitionCheckViolation
 
 # Configure partition columns with custom column names
 partition_cols = [
@@ -71,9 +71,12 @@ sql = """
     WHERE event_date BETWEEN '2021-09-13' AND '2021-09-26'
 """
 
-results = checker.check_query(sql)
-for result in results:
-    print(f"{result.status}: {result.message}")
+violations = checker.check_query(sql)
+if not violations:
+    print("✓ All partitioned tables have proper filtering")
+else:
+    for violation in violations:
+        print(f"✗ {violation.violation.value}: {violation.message}")
 ```
 
 #### Per-Table Date Range Limits
@@ -94,15 +97,15 @@ partition_cols = [
     DatePartitionColumn(
         "events.log_table",
         "event_time",
-        "YYYY-mm-dd",
+        "YYYY-MM-dd",
         max_date_range_days=7
     ),
 ]
 
 checker = PartitionChecker(partitioned_tables=partition_cols)
 
-# This query will fail validation for log_table (15 days > 7 max)
-# but pass for sales_history (15 days <= 30 max)
+# This query will have a violation for log_table (15 days > 7 max)
+# but not for sales_history (15 days <= 30 max)
 sql = """
     SELECT a.day, b.event_time
     FROM warehouse.fact.sales_history a
@@ -111,7 +114,8 @@ sql = """
       AND b.event_time BETWEEN '2021-09-01' AND '2021-09-15'
 """
 
-results = checker.check_query(sql)
+violations = checker.check_query(sql)
+# violations will contain one entry for log_table only
 ```
 
 ### Configuration Classes
@@ -152,7 +156,7 @@ from sql_ranger import DatePartitionColumn
 dpc = DatePartitionColumn(
     "warehouse.fact.sales_history",
     "day",
-    "YYYY-mm-dd",
+    "YYYY-MM-dd",
     max_date_range_days=30
 )
 ```
@@ -167,13 +171,18 @@ The partition checker enforces these rules:
     - `column = 'date'` (single date)
     - `column BETWEEN 'start' AND 'end'`
     - Both `column >= 'start'` AND `column <= 'end'`
-4. **Optional Max Range**: When `max_date_range_days` is configured (via `DatePartitionColumn` or legacy `max_days`), it enforces a maximum date range (best-effort estimation)
+4. **Optional Max Range**: When `max_date_range_days` is configured (via `DatePartitionColumn`), it enforces a maximum date range (best-effort estimation)
 
-### Result Status Types
+### Return Values
 
-| Status | Description |
+The validation functions return a list of `PartitionCheckResult` objects:
+- **Empty list**: All partitioned tables are properly filtered (no violations)
+- **Non-empty list**: Contains violation details for each table that fails validation
+
+### Violation Types
+
+| Violation | Description |
 |--------|-------------|
-| `VALID` | Query properly uses partitioning |
 | `MISSING_DAY_FILTER` | Query doesn't have a partition column filter in the `WHERE` clause |
 | `DAY_FILTER_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
 | `NO_FINITE_RANGE` | Query doesn't define a finite date range |
@@ -181,23 +190,23 @@ The partition checker enforces these rules:
 
 ### Example Validation Results
 
-**Valid Query:**
+**Valid Query (no violations returned):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
 WHERE day BETWEEN '2021-09-13' AND '2021-09-26'
 ```
-✓ Table 'sales_history' has proper partition filtering
+Returns: `[]` (empty list - no violations)
 
 **Invalid Query (function on day):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
 WHERE DATE_FORMAT(day, '%Y-%m') = '2021-09'
 ```
-✗ Table 'sales_history' uses 'day' column with a function, which disallows partitioning in some systems.
+Returns violation: `DAY_FILTER_WITH_FUNCTION` - Table 'sales_history' uses 'day' column with a function, which disables partitioning.
 
 **Invalid Query (no upper bound):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
 WHERE day >= '2021-09-13'
 ```
-✗ Table 'sales_history' does not have a finite date range
+Returns violation: `NO_FINITE_RANGE` - Table 'sales_history' does not have a finite date range
