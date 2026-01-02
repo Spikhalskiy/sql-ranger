@@ -45,7 +45,7 @@ test:
 
 test-coverage:
 	@echo "Running tests with coverage..."
-	@conda run --name $(CONDA_ENV_NAME) --no-capture-output pytest tests/ --cov=trino_sql_agent --cov-report=term-missing --cov-report=html
+	@conda run --name $(CONDA_ENV_NAME) --no-capture-output pytest tests/ --cov=sqlranger --cov-report=term-missing --cov-report=html
 	@echo "✓ Coverage report generated in htmlcov/index.html"
 
 lint:
