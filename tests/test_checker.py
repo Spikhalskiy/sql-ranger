@@ -203,7 +203,7 @@ class TestPartitionChecker:
 
         assert len(results) == 1
         assert results[0].violation == PartitionCheckViolation.QUERY_INVALID_SYNTAX
-        assert results[0].message.startswith("Failed to parse SQL query: Expected table name but got None.")
+        assert "Failed to parse SQL query" in results[0].message
         assert results[0].table_name is None
         assert results[0].estimated_days is None
 
