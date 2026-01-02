@@ -18,7 +18,7 @@ class TestPartitionChecker:
         FROM gridhive.fact.sales_history
         WHERE product_id = 12345 AND store_id = 100 AND day = '2025-12-02'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -33,7 +33,7 @@ class TestPartitionChecker:
         WHERE day BETWEEN '2021-09-13' AND '2021-09-26'
             AND product_id = 789 AND store_id = 50
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -47,7 +47,7 @@ class TestPartitionChecker:
         FROM gridhive.fact.inventory_log
         WHERE day >= '2021-09-13' AND day <= '2021-09-26' AND gridhive_id = 5
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("inventory_log", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -61,7 +61,7 @@ class TestPartitionChecker:
         FROM gridhive.fact.sales_history
         WHERE day > '2021-09-13' AND day < '2021-09-26' AND product_id = 456
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -70,7 +70,7 @@ class TestPartitionChecker:
     def test_missing_day_filter_no_where(self):
         """Test query without WHERE clause."""
         sql = "SELECT * FROM gridhive.fact.sales_history"
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -84,7 +84,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.fact.inventory_log
         WHERE product_id = 12345 AND gridhive_id = 10
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("inventory_log", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -97,7 +97,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.fact.sales_history
         WHERE DATE_FORMAT(day, '%Y-%m') = '2021-09' AND product_id = 100
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -110,7 +110,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.fact.inventory_log
         WHERE EXTRACT(YEAR FROM day) = 2021 AND gridhive_id = 5
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("inventory_log", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -122,7 +122,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.fact.sales_history
         WHERE day >= '2021-09-13' AND product_id = 500
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -135,7 +135,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.fact.inventory_log
         WHERE day <= '2021-09-26' AND gridhive_id = 8
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("inventory_log", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -149,7 +149,10 @@ class TestPartitionChecker:
         JOIN gridhive.fact.inventory_log b ON a.day = b.day
         WHERE a.day = '2021-09-13' AND b.day = '2021-09-13'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history", "inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[
+            PartitionColumn("sales_history", "day"),
+            PartitionColumn("inventory_log", "day")
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 2
@@ -164,7 +167,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.dim.products
         WHERE product_id = 12345
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 0
@@ -177,7 +180,7 @@ class TestPartitionChecker:
         JOIN gridhive.dim.products b ON a.product_id = b.id
         WHERE a.day = '2021-09-13'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -187,7 +190,7 @@ class TestPartitionChecker:
     def test_custom_partitioned_tables(self):
         """Test with custom list of partitioned tables."""
         sql = "SELECT * FROM order_events WHERE other_col = 1"
-        checker = PartitionChecker(partitioned_tables=["order_events"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("order_events", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -200,7 +203,7 @@ class TestPartitionChecker:
         SELECT * FROM gridhive.fact.SALES_HISTORY
         WHERE day = '2021-09-13'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -209,7 +212,7 @@ class TestPartitionChecker:
     def test_invalid_sql_returns_empty(self):
         """Test that invalid SQL returns empty results."""
         sql = "THIS IS NOT VALID SQL !!!"
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 0
@@ -224,7 +227,7 @@ class TestPartitionChecker:
         )
         SELECT * FROM daily_totals
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -240,7 +243,9 @@ class TestDateRangeEstimation:
         SELECT * FROM gridhive.fact.sales_history
         WHERE day BETWEEN '2021-09-13' AND '2021-09-26'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"], max_days=20)
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=20)
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -253,7 +258,9 @@ class TestDateRangeEstimation:
         SELECT * FROM gridhive.fact.inventory_log
         WHERE day >= '2021-09-13' AND day <= '2021-09-26'
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"], max_days=20)
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("inventory_log", "day", "YYYY-mm-dd", max_date_range_days=20)
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -265,7 +272,9 @@ class TestDateRangeEstimation:
         SELECT * FROM gridhive.fact.sales_history
         WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"], max_days=100)
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=100)
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -279,7 +288,9 @@ class TestDateRangeEstimation:
         SELECT * FROM gridhive.fact.inventory_log
         WHERE day = '2021-09-13'
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"], max_days=5)
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("inventory_log", "day", "YYYY-mm-dd", max_date_range_days=5)
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -291,7 +302,7 @@ class TestDateRangeEstimation:
         SELECT * FROM gridhive.fact.sales_history
         WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])  # no max_days
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -303,7 +314,9 @@ class TestDateRangeEstimation:
         SELECT * FROM gridhive.fact.sales_history
         WHERE day >= date('2021-09-13') AND day <= date('2021-09-26')
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"], max_days=20)
+        checker = PartitionChecker(partitioned_tables=[
+            DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=20)
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -315,12 +328,12 @@ class TestConvenienceFunction:
     """Test suite for check_partition_usage convenience function."""
 
     def test_convenience_function_default_tables(self):
-        """Test convenience function with default partitioned tables."""
+        """Test convenience function with partitioned tables."""
         sql = """
         SELECT * FROM gridhive.fact.sales_history
         WHERE day = '2021-09-13'
         """
-        results = check_partition_usage(sql, partitioned_tables=["sales_history"])
+        results = check_partition_usage(sql, partitioned_tables=[PartitionColumn("sales_history", "day")])
 
         assert len(results) == 1
         assert results[0].status == PartitionCheckStatus.VALID
@@ -328,19 +341,24 @@ class TestConvenienceFunction:
     def test_convenience_function_custom_tables(self):
         """Test convenience function with custom partitioned tables."""
         sql = "SELECT * FROM order_events WHERE day = '2021-09-13'"
-        results = check_partition_usage(sql, partitioned_tables=["order_events"])
+        results = check_partition_usage(sql, partitioned_tables=[PartitionColumn("order_events", "day")])
 
         assert len(results) == 1
         assert results[0].status == PartitionCheckStatus.VALID
         assert results[0].table_name == "order_events"
 
     def test_convenience_function_with_max_days(self):
-        """Test convenience function with max_days parameter."""
+        """Test convenience function with max_date_range_days parameter."""
         sql = """
         SELECT * FROM gridhive.fact.inventory_log
         WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
         """
-        results = check_partition_usage(sql, partitioned_tables=["inventory_log"], max_days=100)
+        results = check_partition_usage(
+            sql,
+            partitioned_tables=[
+                DatePartitionColumn("inventory_log", "day", "YYYY-mm-dd", max_date_range_days=100)
+            ]
+        )
 
         assert len(results) == 1
         assert results[0].status == PartitionCheckStatus.EXCESSIVE_DATE_RANGE
@@ -359,7 +377,7 @@ class TestEdgeCases:
             WHERE day = '2021-09-13'
         ) subq
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -372,7 +390,10 @@ class TestEdgeCases:
         UNION ALL
         SELECT day FROM gridhive.fact.inventory_log WHERE day = '2021-09-14'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history", "inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[
+            PartitionColumn("sales_history", "day"),
+            PartitionColumn("inventory_log", "day")
+        ])
         results = checker.check_query(sql)
 
         assert len(results) == 2
@@ -384,7 +405,7 @@ class TestEdgeCases:
         SELECT day, quantity FROM gridhive.fact.sales_history
         WHERE quantity > 100
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -398,7 +419,7 @@ class TestEdgeCases:
         GROUP BY day
         HAVING day = '2021-09-13'
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         # HAVING is not the same as WHERE for partitioning purposes
@@ -411,7 +432,7 @@ class TestEdgeCases:
         SELECT * FROM gridhive.fact.inventory_log
         WHERE '2021-09-13' <= day AND '2021-09-26' >= day
         """
-        checker = PartitionChecker(partitioned_tables=["inventory_log"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("inventory_log", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -424,7 +445,7 @@ class TestEdgeCases:
         SELECT * FROM gridhive.fact.sales_history
         WHERE (day = '2021-09-13' OR day = '2021-09-14') AND product_id = 100
         """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -437,7 +458,7 @@ class TestEdgeCases:
               SELECT * FROM gridhive.fact.sales_history a join gridhive.fact.inventory b on a.day = b.day
               WHERE '2021-09-13' <= b.day AND '2021-09-26' >= b.day
               """
-        checker = PartitionChecker(partitioned_tables=["sales_history"])
+        checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -498,7 +519,7 @@ class TestDatePartitionColumn:
 
 
 class TestPartitionCheckerWithPartitionColumn:
-    """Test suite for PartitionChecker with new PartitionColumn API."""
+    """Test suite for PartitionChecker with PartitionColumn API."""
 
     def test_checker_with_partition_column_objects(self):
         """Test PartitionChecker with PartitionColumn objects."""
@@ -510,7 +531,7 @@ class TestPartitionCheckerWithPartitionColumn:
         partition_cols = [
             PartitionColumn("sales_history", "day")
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -527,7 +548,7 @@ class TestPartitionCheckerWithPartitionColumn:
         partition_cols = [
             PartitionColumn("log_table", "event_date")
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -544,7 +565,7 @@ class TestPartitionCheckerWithPartitionColumn:
         partition_cols = [
             PartitionColumn("log_table", "event_date")
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -561,7 +582,7 @@ class TestPartitionCheckerWithPartitionColumn:
         partition_cols = [
             DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=20)
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -577,7 +598,7 @@ class TestPartitionCheckerWithPartitionColumn:
         partition_cols = [
             DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=100)
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
@@ -597,7 +618,7 @@ class TestPartitionCheckerWithPartitionColumn:
             DatePartitionColumn("sales_history", "day", "YYYY-mm-dd", max_date_range_days=10),
             DatePartitionColumn("log_table", "event_time", "YYYY-mm-dd", max_date_range_days=30)
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 2
@@ -619,36 +640,8 @@ class TestPartitionCheckerWithPartitionColumn:
         partition_cols = [
             PartitionColumn("warehouse.fact.sales_history", "day")
         ]
-        checker = PartitionChecker(partition_columns=partition_cols)
+        checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
         assert results[0].status == PartitionCheckStatus.VALID
-
-    def test_checker_backward_compat_with_partitioned_tables_list(self):
-        """Test that old API with list of strings still works."""
-        sql = """
-        SELECT day, SUM(quantity)
-        FROM gridhive.fact.sales_history
-        WHERE day = '2025-12-02'
-        """
-        # Old API: list of table name strings
-        checker = PartitionChecker(partitioned_tables=["sales_history"], max_days=30)
-        results = checker.check_query(sql)
-
-        assert len(results) == 1
-        assert results[0].status == PartitionCheckStatus.VALID
-
-    def test_checker_backward_compat_with_global_max_days(self):
-        """Test that old API with global max_days still works."""
-        sql = """
-        SELECT day, SUM(quantity)
-        FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
-        """
-        # Old API: global max_days parameter
-        checker = PartitionChecker(partitioned_tables=["sales_history"], max_days=100)
-        results = checker.check_query(sql)
-
-        assert len(results) == 1
-        assert results[0].status == PartitionCheckStatus.EXCESSIVE_DATE_RANGE

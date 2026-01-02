@@ -27,18 +27,21 @@ Large partitioned tables should always be queried with partition filters to:
 
 ### Usage
 
-#### Simple Validation (Legacy API)
+#### Basic Validation
 
 ```python
-from sql_ranger import check_partition_usage, PartitionCheckStatus
+from sql_ranger import check_partition_usage, PartitionColumn, PartitionCheckStatus
 
-# Simple validation
+# Basic validation with PartitionColumn
 sql = """
     SELECT day, count(*) AS total
     FROM gridhive.fact.sales_history
     WHERE day = '2021-09-13'
 """
-results = check_partition_usage(sql, partitioned_tables=["sales_history"])
+results = check_partition_usage(
+    sql,
+    partitioned_tables=[PartitionColumn("sales_history", "day")]
+)
 
 for result in results:
     if result.status == PartitionCheckStatus.VALID:
@@ -60,7 +63,7 @@ partition_cols = [
     PartitionColumn("events.log_table", "event_date"),
 ]
 
-checker = PartitionChecker(partition_columns=partition_cols)
+checker = PartitionChecker(partitioned_tables=partition_cols)
 
 sql = """
     SELECT event_date, COUNT(*) as total
@@ -96,7 +99,7 @@ partition_cols = [
     ),
 ]
 
-checker = PartitionChecker(partition_columns=partition_cols)
+checker = PartitionChecker(partitioned_tables=partition_cols)
 
 # This query will fail validation for log_table (15 days > 7 max)
 # but pass for sales_history (15 days <= 30 max)

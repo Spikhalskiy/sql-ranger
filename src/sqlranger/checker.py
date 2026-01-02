@@ -88,47 +88,17 @@ class PartitionCheckResult:
 class PartitionChecker:
     """Validates SQL queries for proper partition usage on specified tables."""
 
-    def __init__(
-            self,
-            partitioned_tables: list[str] | list[PartitionColumn] | None = None,
-            max_days: int | None = None,
-            partition_columns: list[PartitionColumn] | None = None,
-    ):
+    def __init__(self, partitioned_tables: list[PartitionColumn]):
         """
         Initialize the PartitionChecker.
 
         Args:
-            partitioned_tables: List of table names (case-insensitive) or PartitionColumn objects.
-                Deprecated: use partition_columns parameter instead.
-            max_days: Maximum allowed date range in days. If None, date range is not checked.
-                Deprecated: use DatePartitionColumn with max_date_range_days instead.
-            partition_columns: List of PartitionColumn objects defining partition configuration.
+            partitioned_tables: List of PartitionColumn objects defining partition configuration.
         """
-        # Support new API with partition_columns
-        if partition_columns is not None:
-            self._partition_configs = {
-                pc.get_nonqualified_table_name().lower(): pc
-                for pc in partition_columns
-            }
-        # Support backward compatibility with partitioned_tables
-        elif partitioned_tables is not None:
-            if all(isinstance(t, str) for t in partitioned_tables):
-                # Old API: list of strings
-                self._partition_configs = {
-                    table.lower(): PartitionColumn(table, "day")
-                    for table in partitioned_tables
-                }
-            else:
-                # New API via partitioned_tables parameter
-                self._partition_configs = {
-                    pc.get_nonqualified_table_name().lower(): pc
-                    for pc in partitioned_tables
-                }
-        else:
-            self._partition_configs = {}
-
-        # Legacy support for global max_days
-        self._global_max_days = max_days
+        self._partition_configs = {
+            pc.get_nonqualified_table_name().lower(): pc
+            for pc in partitioned_tables
+        }
 
     def check_query(self, sql: str) -> list[PartitionCheckResult]:
         """
@@ -238,13 +208,8 @@ class PartitionChecker:
             )
 
         # Check date range if configured
-        max_days = None
-        if isinstance(partition_config, DatePartitionColumn):
+        if isinstance(partition_config, DatePartitionColumn) and partition_config.max_date_range_days is not None:
             max_days = partition_config.max_date_range_days
-        elif self._global_max_days is not None:
-            max_days = self._global_max_days
-
-        if max_days is not None:
             estimated_days = self._estimate_date_range(partition_conditions)
             if estimated_days is not None and estimated_days > max_days:
                 return PartitionCheckResult(
@@ -500,27 +465,27 @@ class PartitionChecker:
 
 def check_partition_usage(
         sql: str,
-        partitioned_tables: list[str] | None = None,
-        max_days: int | None = None,
+        partitioned_tables: list[PartitionColumn],
 ) -> list[PartitionCheckResult]:
     """
     Convenience function to check SQL query for proper partition usage.
 
     Args:
         sql: The SQL query to validate.
-        partitioned_tables: List of table names that require partitioning.
-        max_days: Maximum allowed date range in days. If None, date range is not checked.
+        partitioned_tables: List of PartitionColumn objects defining partition configuration.
 
     Returns:
         List of PartitionCheckResult objects, one for each partitioned table found.
         Empty list if no partitioned tables are used or if query is invalid.
 
     Example:
+        >>> from sqlranger import PartitionColumn
         >>> results = check_partition_usage(
-        ...     "SELECT * FROM warehouse.fact.sales_history WHERE day = '2021-09-13'"
+        ...     "SELECT * FROM warehouse.fact.sales_history WHERE day = '2021-09-13'",
+        ...     [PartitionColumn("sales_history", "day")]
         ... )
         >>> results[0].status
         <PartitionCheckStatus.VALID: 'valid'>
     """
-    checker = PartitionChecker(partitioned_tables=partitioned_tables, max_days=max_days)
+    checker = PartitionChecker(partitioned_tables=partitioned_tables)
     return checker.check_query(sql)
