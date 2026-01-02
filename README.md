@@ -30,7 +30,7 @@ Large partitioned tables should always be queried with partition filters to:
 #### Basic Validation
 
 ```python
-from sqlranger import check_partition_usage, PartitionColumn, PartitionCheckViolation
+from sqlranger import check_partition_usage, PartitionColumn, PartitionViolationType
 
 # Basic validation with PartitionColumn
 sql = """
@@ -55,12 +55,12 @@ else:
 For more control over partition configuration, use `PartitionColumn` and `DatePartitionColumn`:
 
 ```python
-from sqlranger import PartitionChecker, PartitionColumn, DatePartitionColumn, PartitionCheckViolation
+from sqlranger import PartitionChecker, PartitionColumn, DatePartitionColumn, PartitionViolationType
 
 # Configure partition columns with custom column names
 partition_cols = [
-    PartitionColumn("gridhive.fact.sales_history", "day"),
-    PartitionColumn("events.log_table", "event_date"),
+   PartitionColumn("gridhive.fact.sales_history", "day"),
+   PartitionColumn("events.log_table", "event_date"),
 ]
 
 checker = PartitionChecker(partitioned_tables=partition_cols)
@@ -71,12 +71,12 @@ sql = """
     WHERE event_date BETWEEN '2021-09-13' AND '2021-09-26'
 """
 
-violations = checker.check_query(sql)
+violations = checker.find_violations(sql)
 if not violations:
-    print("✓ All partitioned tables have proper filtering")
+   print("✓ All partitioned tables have proper filtering")
 else:
-    for violation in violations:
-        print(f"✗ {violation.violation.value}: {violation.message}")
+   for violation in violations:
+      print(f"✗ {violation.violation.value}: {violation.message}")
 ```
 
 #### Per-Table Date Range Limits
@@ -88,18 +88,18 @@ from sql_ranger import PartitionChecker, DatePartitionColumn
 
 # Configure different max date ranges per table
 partition_cols = [
-    DatePartitionColumn(
-        "gridhive.fact.sales_history",
-        "day",
-        "YYYY-mm-dd",
-        max_date_range_days=30
-    ),
-    DatePartitionColumn(
-        "events.log_table",
-        "event_time",
-        "YYYY-MM-dd",
-        max_date_range_days=7
-    ),
+   DatePartitionColumn(
+      "gridhive.fact.sales_history",
+      "day",
+      "YYYY-mm-dd",
+      max_date_range_days=30
+   ),
+   DatePartitionColumn(
+      "events.log_table",
+      "event_time",
+      "YYYY-MM-dd",
+      max_date_range_days=7
+   ),
 ]
 
 checker = PartitionChecker(partitioned_tables=partition_cols)
@@ -114,7 +114,7 @@ sql = """
       AND b.event_time BETWEEN '2021-09-01' AND '2021-09-15'
 """
 
-violations = checker.check_query(sql)
+violations = checker.find_violations(sql)
 # violations will contain one entry for log_table only
 ```
 
@@ -175,7 +175,7 @@ The partition checker enforces these rules:
 
 ### Return Values
 
-The validation functions return a list of `PartitionCheckResult` objects:
+The validation functions return a list of `PartitionViolation` objects:
 - **Empty list**: All partitioned tables are properly filtered (no violations)
 - **Non-empty list**: Contains violation details for each table that fails validation
 

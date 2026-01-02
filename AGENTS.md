@@ -24,7 +24,7 @@ sql-ranger/
 **Key Components:**
 - **PartitionChecker**: Main class that validates SQL queries against partitioning requirements
 - **PartitionCheckStatus**: Enum defining validation result statuses (VALID, MISSING_DAY_FILTER, DAY_FILTER_WITH_FUNCTION, NO_FINITE_RANGE, EXCESSIVE_DATE_RANGE)
-- **PartitionCheckResult**: Dataclass containing validation results
+- **PartitionViolation**: Dataclass containing validation results
 - **check_partition_usage()**: Convenience function for simple validation
 
 **Dependencies:**
