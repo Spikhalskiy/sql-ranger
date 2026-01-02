@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "sqlranger"
-version = "0.0.1"
+version = "0.0.2"
 description = "SQL Ranger: Enforcer of partitioning or finite-range check presence in SQL Queries"
 readme = "README.md"
 authors=["Dmitry Spikhalsky <dmitry@spikhalskiy.com>"]
