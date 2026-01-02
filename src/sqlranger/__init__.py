@@ -2,17 +2,17 @@
 from .checker import (
     DatePartitionColumn,
     PartitionChecker,
+    PartitionColumn,
     PartitionViolation,
     PartitionViolationType,
-    PartitionColumn,
     check_partition_usage,
 )
 
 __all__ = [
     "DatePartitionColumn",
-    "PartitionViolation",
-    "PartitionViolationType",
     "PartitionChecker",
     "PartitionColumn",
+    "PartitionViolation",
+    "PartitionViolationType",
     "check_partition_usage",
 ]

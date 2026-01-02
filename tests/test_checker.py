@@ -2,8 +2,8 @@
 from sqlranger.checker import (
     DatePartitionColumn,
     PartitionChecker,
-    PartitionViolationType,
     PartitionColumn,
+    PartitionViolationType,
     check_partition_usage,
 )
 
