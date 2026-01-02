@@ -252,22 +252,6 @@ class PartitionChecker:
 
         return partition_conditions
 
-    def _references_column(self, condition: exp.Expression, column_name: str) -> bool:
-        """
-        Check if a condition references the specified column.
-
-        Args:
-            condition: Expression to check.
-            column_name: Name of the column to check for.
-
-        Returns:
-            True if the expression references the specified column.
-        """
-        return any(
-            column.name and column.name.lower() == column_name.lower()
-            for column in condition.find_all(exp.Column)
-        )
-
     def _get_expr_column_table(self, column: exp.Column, condition: exp.Expression) -> exp.Table | None:
         """
         Get the table from the condition's parent select for a given column.

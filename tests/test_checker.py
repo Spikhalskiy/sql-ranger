@@ -323,50 +323,6 @@ class TestDateRangeEstimation:
         # Should still validate properly even with date functions on the value side
         assert results[0].status == PartitionCheckStatus.VALID
 
-
-class TestConvenienceFunction:
-    """Test suite for check_partition_usage convenience function."""
-
-    def test_convenience_function_default_tables(self):
-        """Test convenience function with partitioned tables."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day = '2021-09-13'
-        """
-        results = check_partition_usage(sql, partitioned_tables=[PartitionColumn("sales_history", "day")])
-
-        assert len(results) == 1
-        assert results[0].status == PartitionCheckStatus.VALID
-
-    def test_convenience_function_custom_tables(self):
-        """Test convenience function with custom partitioned tables."""
-        sql = "SELECT * FROM order_events WHERE day = '2021-09-13'"
-        results = check_partition_usage(sql, partitioned_tables=[PartitionColumn("order_events", "day")])
-
-        assert len(results) == 1
-        assert results[0].status == PartitionCheckStatus.VALID
-        assert results[0].table_name == "order_events"
-
-    def test_convenience_function_with_max_days(self):
-        """Test convenience function with max_date_range_days parameter."""
-        sql = """
-        SELECT * FROM gridhive.fact.inventory_log
-        WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
-        """
-        results = check_partition_usage(
-            sql,
-            partitioned_tables=[
-                DatePartitionColumn("inventory_log", "day", "YYYY-mm-dd", max_date_range_days=100)
-            ]
-        )
-
-        assert len(results) == 1
-        assert results[0].status == PartitionCheckStatus.EXCESSIVE_DATE_RANGE
-
-
-class TestEdgeCases:
-    """Test suite for edge cases and complex queries."""
-
     def test_subquery_with_day_filter(self):
         """Test query with subquery containing day filter."""
         sql = """
@@ -464,58 +420,6 @@ class TestEdgeCases:
         assert len(results) == 1
         # Should still detect as valid since we check both sides
         assert results[0].status == PartitionCheckStatus.MISSING_DAY_FILTER
-
-
-class TestPartitionColumn:
-    """Test suite for PartitionColumn class."""
-
-    def test_get_nonqualified_table_name_simple(self):
-        """Test extracting non-qualified name from simple table name."""
-        pc = PartitionColumn("sales_history", "day")
-        assert pc.get_nonqualified_table_name() == "sales_history"
-
-    def test_get_nonqualified_table_name_with_schema(self):
-        """Test extracting non-qualified name from schema.table."""
-        pc = PartitionColumn("fact.sales_history", "day")
-        assert pc.get_nonqualified_table_name() == "sales_history"
-
-    def test_get_nonqualified_table_name_fully_qualified(self):
-        """Test extracting non-qualified name from catalog.schema.table."""
-        pc = PartitionColumn("warehouse.fact.sales_history", "day")
-        assert pc.get_nonqualified_table_name() == "sales_history"
-
-    def test_partition_column_attributes(self):
-        """Test that PartitionColumn stores attributes correctly."""
-        pc = PartitionColumn("warehouse.fact.sales_history", "day")
-        assert pc.table_name == "warehouse.fact.sales_history"
-        assert pc.column_name == "day"
-
-
-class TestDatePartitionColumn:
-    """Test suite for DatePartitionColumn class."""
-
-    def test_date_partition_column_attributes(self):
-        """Test that DatePartitionColumn stores all attributes correctly."""
-        dpc = DatePartitionColumn(
-            "warehouse.fact.sales_history",
-            "day",
-            "YYYY-mm-dd",
-            max_date_range_days=30
-        )
-        assert dpc.table_name == "warehouse.fact.sales_history"
-        assert dpc.column_name == "day"
-        assert dpc.date_pattern == "YYYY-mm-dd"
-        assert dpc.max_date_range_days == 30
-
-    def test_date_partition_column_inherits_get_nonqualified(self):
-        """Test that DatePartitionColumn inherits get_nonqualified_table_name."""
-        dpc = DatePartitionColumn("warehouse.fact.sales_history", "day", "YYYY-mm-dd")
-        assert dpc.get_nonqualified_table_name() == "sales_history"
-
-    def test_date_partition_column_without_max_days(self):
-        """Test DatePartitionColumn without max_date_range_days."""
-        dpc = DatePartitionColumn("warehouse.fact.sales_history", "day", "YYYY-mm-dd")
-        assert dpc.max_date_range_days is None
 
 
 class TestPartitionCheckerWithPartitionColumn:
@@ -634,14 +538,71 @@ class TestPartitionCheckerWithPartitionColumn:
         """Test that PartitionColumn with fully qualified names works correctly."""
         sql = """
         SELECT day, SUM(quantity)
-        FROM warehouse.fact.sales_history
+        FROM gridhive.fact.sales_history
         WHERE day = '2025-12-02'
         """
         partition_cols = [
-            PartitionColumn("warehouse.fact.sales_history", "day")
+            PartitionColumn("gridhive.fact.sales_history", "day")
         ]
         checker = PartitionChecker(partitioned_tables=partition_cols)
         results = checker.check_query(sql)
 
         assert len(results) == 1
         assert results[0].status == PartitionCheckStatus.VALID
+
+class TestPartitionColumn:
+    """Test suite for PartitionColumn class."""
+
+    def test_get_nonqualified_table_name_simple(self):
+        """Test extracting non-qualified name from simple table name."""
+        pc = PartitionColumn("sales_history", "day")
+        assert pc.get_nonqualified_table_name() == "sales_history"
+
+    def test_get_nonqualified_table_name_with_schema(self):
+        """Test extracting non-qualified name from schema.table."""
+        pc = PartitionColumn("fact.sales_history", "day")
+        assert pc.get_nonqualified_table_name() == "sales_history"
+
+    def test_get_nonqualified_table_name_fully_qualified(self):
+        """Test extracting non-qualified name from catalog.schema.table."""
+        pc = PartitionColumn("gridhive.fact.sales_history", "day")
+        assert pc.get_nonqualified_table_name() == "sales_history"
+
+class TestConvenienceFunction:
+    """Test suite for check_partition_usage convenience function."""
+
+    def test_convenience_function_default_tables(self):
+        """Test convenience function with partitioned tables."""
+        sql = """
+              SELECT * FROM gridhive.fact.sales_history
+              WHERE day = '2021-09-13' \
+              """
+        results = check_partition_usage(sql, partitioned_tables=[PartitionColumn("sales_history", "day")])
+
+        assert len(results) == 1
+        assert results[0].status == PartitionCheckStatus.VALID
+
+    def test_convenience_function_custom_tables(self):
+        """Test convenience function with custom partitioned tables."""
+        sql = "SELECT * FROM order_events WHERE day = '2021-09-13'"
+        results = check_partition_usage(sql, partitioned_tables=[PartitionColumn("order_events", "day")])
+
+        assert len(results) == 1
+        assert results[0].status == PartitionCheckStatus.VALID
+        assert results[0].table_name == "order_events"
+
+    def test_convenience_function_with_max_days(self):
+        """Test convenience function with max_date_range_days parameter."""
+        sql = """
+              SELECT * FROM gridhive.fact.inventory_log
+              WHERE day BETWEEN '2021-01-01' AND '2021-12-31' \
+              """
+        results = check_partition_usage(
+            sql,
+            partitioned_tables=[
+                DatePartitionColumn("inventory_log", "day", "YYYY-mm-dd", max_date_range_days=100)
+            ]
+        )
+
+        assert len(results) == 1
+        assert results[0].status == PartitionCheckStatus.EXCESSIVE_DATE_RANGE
