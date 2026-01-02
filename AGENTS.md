@@ -10,7 +10,7 @@ SQL Ranger is a Python library that validates SQL queries for proper partition u
 sql-ranger/
 ├── src/
 │   └── sqlranger/          # Main package source code
-│       ├── __init__.py     # Package initialization, exports public API
+│       ├── init.py         # Package initialization, exports public API
 │       └── checker.py      # Core partition validation logic
 ├── tests/
 │   └── test_checker.py     # Test suite for partition checker
@@ -160,9 +160,9 @@ def function_name(param1: str, param2: int) -> bool:
 
 ### Project-Specific Conventions
 
-2. **Error Handling**: Gracefully handle parsing failures (return empty list/None)
-3. **Case Sensitivity**: Table names are case-insensitive (normalize to lowercase)
-5. **Public API**: Only export through `__init__.py` `__all__` list
+1. **Error Handling**: Gracefully handle parsing failures (return empty list/None)
+2. **Case Sensitivity**: Table names are case-insensitive (normalize to lowercase)
+3. **Public API**: Only export through `__init__.py` `__all__` list
 
 ## Project Boundaries
 
