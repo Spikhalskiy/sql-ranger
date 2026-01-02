@@ -12,6 +12,59 @@ import sqlglot
 from sqlglot import exp
 
 
+class PartitionColumn:
+    """Configuration for a partitioned table column."""
+
+    def __init__(self, table_name: str, column_name: str):
+        """
+        Initialize the PartitionColumn.
+
+        Args:
+            table_name: Full table name (e.g., 'warehouse.fact.sales_history').
+            column_name: Name of the partition column (e.g., 'day').
+        """
+        self.table_name = table_name
+        self.column_name = column_name
+
+    def get_nonqualified_table_name(self) -> str:
+        """
+        Get the non-qualified table name (after the last dot).
+
+        Returns:
+            Short table name without schema/catalog prefix.
+
+        Example:
+            >>> pc = PartitionColumn('warehouse.fact.sales_history', 'day')
+            >>> pc.get_nonqualified_table_name()
+            'sales_history'
+        """
+        return self.table_name.split(".")[-1]
+
+
+class DatePartitionColumn(PartitionColumn):
+    """Configuration for a date-partitioned table column."""
+
+    def __init__(
+        self,
+        table_name: str,
+        column_name: str,
+        date_pattern: str,
+        max_date_range_days: int | None = None,
+    ):
+        """
+        Initialize the DatePartitionColumn.
+
+        Args:
+            table_name: Full table name (e.g., 'warehouse.fact.sales_history').
+            column_name: Name of the partition column (e.g., 'day').
+            date_pattern: Date format pattern (e.g., 'YYYY-mm-dd').
+            max_date_range_days: Maximum allowed date range in days. If None, range is not checked.
+        """
+        super().__init__(table_name, column_name)
+        self.date_pattern = date_pattern
+        self.max_date_range_days = max_date_range_days
+
+
 class PartitionCheckStatus(Enum):
     """Status of partition check validation."""
 
@@ -37,20 +90,45 @@ class PartitionChecker:
 
     def __init__(
             self,
-            partitioned_tables: list[str],
+            partitioned_tables: list[str] | list[PartitionColumn] | None = None,
             max_days: int | None = None,
+            partition_columns: list[PartitionColumn] | None = None,
     ):
         """
         Initialize the PartitionChecker.
 
         Args:
-            partitioned_tables: List of table names (case-insensitive) that require partitioning.
+            partitioned_tables: List of table names (case-insensitive) or PartitionColumn objects.
+                Deprecated: use partition_columns parameter instead.
             max_days: Maximum allowed date range in days. If None, date range is not checked.
+                Deprecated: use DatePartitionColumn with max_date_range_days instead.
+            partition_columns: List of PartitionColumn objects defining partition configuration.
         """
-        self.partitioned_tables = (
-            {table.lower() for table in partitioned_tables}
-        )
-        self.max_days = max_days
+        # Support new API with partition_columns
+        if partition_columns is not None:
+            self._partition_configs = {
+                pc.get_nonqualified_table_name().lower(): pc
+                for pc in partition_columns
+            }
+        # Support backward compatibility with partitioned_tables
+        elif partitioned_tables is not None:
+            if all(isinstance(t, str) for t in partitioned_tables):
+                # Old API: list of strings
+                self._partition_configs = {
+                    table.lower(): PartitionColumn(table, "day")
+                    for table in partitioned_tables
+                }
+            else:
+                # New API via partitioned_tables parameter
+                self._partition_configs = {
+                    pc.get_nonqualified_table_name().lower(): pc
+                    for pc in partitioned_tables
+                }
+        else:
+            self._partition_configs = {}
+
+        # Legacy support for global max_days
+        self._global_max_days = max_days
 
     def check_query(self, sql: str) -> list[PartitionCheckResult]:
         """
@@ -73,8 +151,9 @@ class PartitionChecker:
         tables = self._extract_tables(parsed)
 
         for table_name in tables:
-            if table_name.lower() in self.partitioned_tables:
-                result = self._check_table_partition(parsed, table_name)
+            if table_name.lower() in self._partition_configs:
+                partition_config = self._partition_configs[table_name.lower()]
+                result = self._check_table_partition(parsed, table_name, partition_config)
                 results.append(result)
 
         return results
@@ -95,54 +174,60 @@ class PartitionChecker:
                 tables.add(table.name)
         return tables
 
-    def _check_table_partition(self, parsed: exp.Expression, table_name: str) -> PartitionCheckResult:
+    def _check_table_partition(
+        self, parsed: exp.Expression, table_name: str, partition_config: PartitionColumn
+    ) -> PartitionCheckResult:
         """
         Check partition requirements for a specific table.
 
         Args:
             parsed: Parsed SQL expression.
             table_name: Name of the table to check.
+            partition_config: PartitionColumn configuration for the table.
 
         Returns:
             PartitionCheckResult with validation status.
         """
+        column_name = partition_config.column_name
+
         # Find all WHERE clauses in the query
         where_clauses = list(parsed.find_all(exp.Where))
 
         if not where_clauses:
             return PartitionCheckResult(
                 status=PartitionCheckStatus.MISSING_DAY_FILTER,
-                message=f"Table '{table_name}' is used without a WHERE clause containing a 'day' filter",
+                message=f"Table '{table_name}' is used without a WHERE clause containing a '{column_name}' filter",
                 table_name=table_name,
             )
 
-        # Check if any WHERE clause has a day filter
-        day_conditions = []
+        # Check if any WHERE clause has a partition column filter
+        partition_conditions = []
         for where in where_clauses:
-            conditions = self._extract_day_conditions(where, table_name)
-            day_conditions.extend(conditions)
+            conditions = self._extract_partition_conditions(where, table_name, column_name)
+            partition_conditions.extend(conditions)
 
-        if not day_conditions:
+        if not partition_conditions:
             return PartitionCheckResult(
                 status=PartitionCheckStatus.MISSING_DAY_FILTER,
-                message=f"Table '{table_name}' is used without a 'day' column filter in WHERE clause",
+                message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
                 table_name=table_name,
             )
 
-        # Check if day column is used without functions
-        for condition in day_conditions:
-            if self._has_function_on_day_column(condition):
+        # Check if partition column is used without functions
+        for condition in partition_conditions:
+            if self._has_function_on_column(condition, column_name):
                 return PartitionCheckResult(
                     status=PartitionCheckStatus.DAY_FILTER_WITH_FUNCTION,
                     message=(
-                        f"Table '{table_name}' uses 'day' column with a function, which disables partitioning. "
-                        "Use raw 'day' column in comparisons."
+                        f"Table '{table_name}' uses '{column_name}' column with a function, "
+                        "which disables partitioning. "
+                        f"Use raw '{column_name}' column in comparisons."
                     ),
                     table_name=table_name,
                 )
 
         # Check for finite range
-        if not self._has_finite_range(day_conditions):
+        if not self._has_finite_range(partition_conditions):
             return PartitionCheckResult(
                 status=PartitionCheckStatus.NO_FINITE_RANGE,
                 message=(
@@ -152,15 +237,21 @@ class PartitionChecker:
                 table_name=table_name,
             )
 
-        # Optional: Check date range if max_days is set
-        if self.max_days is not None:
-            estimated_days = self._estimate_date_range(day_conditions)
-            if estimated_days is not None and estimated_days > self.max_days:
+        # Check date range if configured
+        max_days = None
+        if isinstance(partition_config, DatePartitionColumn):
+            max_days = partition_config.max_date_range_days
+        elif self._global_max_days is not None:
+            max_days = self._global_max_days
+
+        if max_days is not None:
+            estimated_days = self._estimate_date_range(partition_conditions)
+            if estimated_days is not None and estimated_days > max_days:
                 return PartitionCheckResult(
                     status=PartitionCheckStatus.EXCESSIVE_DATE_RANGE,
                     message=(
                         f"Table '{table_name}' has an excessive date range of approximately "
-                        f"{estimated_days} days (max: {self.max_days})"
+                        f"{estimated_days} days (max: {max_days})"
                     ),
                     table_name=table_name,
                     estimated_days=estimated_days,
@@ -172,40 +263,47 @@ class PartitionChecker:
             table_name=table_name,
         )
 
-    def _extract_day_conditions(self, where: exp.Where, table_name: str) -> list[exp.Expression]:
+    def _extract_partition_conditions(
+        self, where: exp.Where, table_name: str, column_name: str
+    ) -> list[exp.Expression]:
         """
-        Extract conditions involving the 'day' column from a WHERE clause.
+        Extract conditions involving the partition column from a WHERE clause.
 
         Args:
             where: WHERE clause expression.
-            table_name: Name of the table to extract the day conditions for.
+            table_name: Name of the table to extract the partition conditions for.
+            column_name: Name of the partition column.
 
         Returns:
-            List of expressions that reference the 'day' column.
+            List of expressions that reference the partition column.
         """
-        day_conditions = []
+        partition_conditions = []
 
         # Find all comparison and BETWEEN expressions
         for node in where.walk():
             is_comparison = isinstance(node, (exp.EQ, exp.LT, exp.LTE, exp.GT, exp.GTE, exp.Between))
-            if is_comparison and self._references_day_column_of_table(node, table_name):
-                day_conditions.append(node)
+            if is_comparison and self._references_column_of_table(node, table_name, column_name):
+                partition_conditions.append(node)
 
-        return day_conditions
+        return partition_conditions
 
-    def _references_day_column(self, condition: exp.Expression) -> bool:
+    def _references_column(self, condition: exp.Expression, column_name: str) -> bool:
         """
-        Check if a condition references the 'day' column.
+        Check if a condition references the specified column.
 
         Args:
             condition: Expression to check.
+            column_name: Name of the column to check for.
 
         Returns:
-            True if the expression references a 'day' column.
+            True if the expression references the specified column.
         """
-        return any(column.name and column.name.lower() == "day" for column in condition.find_all(exp.Column))
+        return any(
+            column.name and column.name.lower() == column_name.lower()
+            for column in condition.find_all(exp.Column)
+        )
 
-    def _get_expr_collumn_table(self, column: exp.Column, condition: exp.Expression) -> exp.Table | None:
+    def _get_expr_column_table(self, column: exp.Column, condition: exp.Expression) -> exp.Table | None:
         """
         Get the table from the condition's parent select for a given column.
 
@@ -216,38 +314,40 @@ class PartitionChecker:
         tables = {table.alias.lower() : table for table in list(condition.parent_select.find_all(exp.Table))}
         return tables.get(column.table.lower(), None)
 
-    def _references_day_column_of_table(self, condition: exp.Expression, table_name: str) -> bool:
+    def _references_column_of_table(self, condition: exp.Expression, table_name: str, column_name: str) -> bool:
         """
-        Check if a condition references the 'day' column.
+        Check if a condition references the specified column of a specific table.
 
         Args:
             condition: Expression to check.
-            table_name: Name of the table to check the day column of.
+            table_name: Name of the table to check the column of.
+            column_name: Name of the column to check for.
 
         Returns:
-            True if the expression references a 'day' column.
+            True if the expression references the specified column of the table.
         """
-        return any(column.name and column.name.lower() == "day"
-                   and self._get_expr_collumn_table(column, condition).name.lower() == table_name.lower()
+        return any(column.name and column.name.lower() == column_name.lower()
+                   and self._get_expr_column_table(column, condition).name.lower() == table_name.lower()
                    for column in condition.find_all(exp.Column))
 
-    def _has_function_on_day_column(self, condition: exp.Expression) -> bool:
+    def _has_function_on_column(self, condition: exp.Expression, column_name: str) -> bool:
         """
-        Check if day column is wrapped in a function (which breaks partitioning).
+        Check if the specified column is wrapped in a function (which breaks partitioning).
 
         Args:
             condition: Expression to check.
+            column_name: Name of the column to check for.
 
         Returns:
-            True if day column is used inside a function.
+            True if the column is used inside a function.
         """
         # Walk through the expression tree
         for node in condition.walk():
             # Check if this is a function call
             if isinstance(node, (exp.Func, exp.Anonymous)):
-                # Check if any of the function's arguments contain the day column
+                # Check if any of the function's arguments contain the column
                 for column in node.find_all(exp.Column):
-                    if column.name and column.name.lower() == "day":
+                    if column.name and column.name.lower() == column_name.lower():
                         return True
         return False
 
@@ -338,11 +438,14 @@ class PartitionChecker:
         Returns:
             Datetime object if date can be extracted, None otherwise.
         """
-        # Get the right side of the comparison (assuming day column is on the left)
-        # Check which side has the day column
-        if self._references_day_column(condition.this):
+        # Get the right side of the comparison
+        # Check which side has a column reference
+        has_column_left = any(isinstance(n, exp.Column) for n in condition.this.walk())
+        has_column_right = any(isinstance(n, exp.Column) for n in condition.expression.walk())
+
+        if has_column_left and not has_column_right:
             return self._extract_date_value(condition.expression)
-        if self._references_day_column(condition.expression):
+        if has_column_right and not has_column_left:
             return self._extract_date_value(condition.this)
 
         return None
