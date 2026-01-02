@@ -195,13 +195,17 @@ class TestPartitionChecker:
 
         assert len(results) == 0  # No violations
 
-    def test_invalid_sql_returns_empty(self):
-        """Test that invalid SQL returns empty results."""
-        sql = "THIS IS NOT VALID SQL !!!"
+    def test_invalid_sql_incomplete_query(self):
+        """Test that incomplete SQL returns QUERY_INVALID_SYNTAX violation."""
+        sql = "SELECT * FROM"
         checker = PartitionChecker(partitioned_tables=[PartitionColumn("sales_history", "day")])
         results = checker.check_query(sql)
 
-        assert len(results) == 0
+        assert len(results) == 1
+        assert results[0].violation == PartitionCheckViolation.QUERY_INVALID_SYNTAX
+        assert "Failed to parse SQL query" in results[0].message
+        assert results[0].table_name is None
+        assert results[0].estimated_days is None
 
     def test_cte_with_day_filter(self):
         """Test query with CTE containing day filter."""
