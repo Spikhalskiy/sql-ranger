@@ -1,6 +1,18 @@
-# SQL Ranger
 
-Enforcer of partitioning or finite-range check presence in SQL Queries
+
+# <img width="128" height="128" alt="ChatGPT_Image_Jan_1__2026__09_22_31_PM-removebg-preview" src="https://github.com/user-attachments/assets/a9798dac-1a1a-4a71-962b-e00be346d0aa" /> SQL Ranger
+
+Enforcer of finite-range partitioning checks presence in SQL Queries.
+
+## Purpose
+
+When dealing with big historical tables that may contain terabytes of data, it's a common practice to partition them based on a day or an hour. 
+It's also highly desirable to write queries in a way that absolutely avoids full scans.
+This project helps check and ensure that queries have explicit finite boundaries on the values of partitioning columns.
+
+Intended usages that drive the development of this project:
+1. In combination with query plan complexity estimates (or actual cost post-execution), it can be used to alert about queries that are not effectively utilizing partitions.
+2. The result can be used as feedback to the SQL-generating LLM agent to help it with generating partitioning-aware queries.
 
 ## Partition Usage Validation
 
@@ -43,14 +55,14 @@ The partition checker enforces these rules:
     - `day = 'date'` (single date)
     - `day BETWEEN 'start' AND 'end'`
     - Both `day >= 'start'` AND `day <= 'end'`
-4. **Optional Max Range**: When `max_days` is configured, enforces maximum date range (best-effort estimation)
+4. **Optional Max Range**: When `max_days` is configured, it enforces a maximum date range (best-effort estimation)
 
 ### Result Status Types
 
 | Status | Description |
 |--------|-------------|
 | `VALID` | Query properly uses partitioning |
-| `MISSING_DAY_FILTER` | Query doesn't have a `day` filter in WHERE clause |
+| `MISSING_DAY_FILTER` | Query doesn't have a `day` filter in the `WHERE` clause |
 | `DAY_FILTER_WITH_FUNCTION` | Day column is wrapped in a function (breaks partitioning) |
 | `NO_FINITE_RANGE` | Query doesn't define a finite date range |
 | `EXCESSIVE_DATE_RANGE` | Date range exceeds the configured maximum |
@@ -69,7 +81,7 @@ WHERE day BETWEEN '2021-09-13' AND '2021-09-26'
 SELECT * FROM gridhive.fact.sales_history
 WHERE DATE_FORMAT(day, '%Y-%m') = '2021-09'
 ```
-✗ Table 'sales_history' uses 'day' column with a function, which disables partitioning
+✗ Table 'sales_history' uses 'day' column with a function, which disallows partitioning in some systems.
 
 **Invalid Query (no upper bound):**
 ```sql
