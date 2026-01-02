@@ -59,7 +59,7 @@ from sqlranger import PartitionChecker, PartitionColumn, DatePartitionColumn, Pa
 
 # Configure partition columns with custom column names
 partition_cols = [
-    PartitionColumn("warehouse.fact.sales_history", "day"),
+    PartitionColumn("gridhive.fact.sales_history", "day"),
     PartitionColumn("events.log_table", "event_date"),
 ]
 
@@ -89,7 +89,7 @@ from sql_ranger import PartitionChecker, DatePartitionColumn
 # Configure different max date ranges per table
 partition_cols = [
     DatePartitionColumn(
-        "warehouse.fact.sales_history",
+        "gridhive.fact.sales_history",
         "day",
         "YYYY-mm-dd",
         max_date_range_days=30
@@ -108,7 +108,7 @@ checker = PartitionChecker(partitioned_tables=partition_cols)
 # but not for sales_history (15 days <= 30 max)
 sql = """
     SELECT a.day, b.event_time
-    FROM warehouse.fact.sales_history a
+    FROM gridhive.fact.sales_history a
     JOIN events.log_table b ON a.day = b.event_time
     WHERE a.day BETWEEN '2021-09-01' AND '2021-09-15'
       AND b.event_time BETWEEN '2021-09-01' AND '2021-09-15'
@@ -138,7 +138,7 @@ pc1 = PartitionColumn("sales_history", "day")
 print(pc1.get_nonqualified_table_name())  # Output: "sales_history"
 
 # Fully qualified table name
-pc2 = PartitionColumn("warehouse.fact.sales_history", "event_date")
+pc2 = PartitionColumn("gridhive.fact.sales_history", "event_date")
 print(pc2.get_nonqualified_table_name())  # Output: "sales_history"
 ```
 
@@ -154,7 +154,7 @@ from sql_ranger import DatePartitionColumn
 
 # Configure a table with 30-day max range
 dpc = DatePartitionColumn(
-    "warehouse.fact.sales_history",
+    "gridhive.fact.sales_history",
     "day",
     "YYYY-MM-dd",
     max_date_range_days=30
