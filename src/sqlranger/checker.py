@@ -65,7 +65,7 @@ class DatePartitionColumn(PartitionColumn):
         self.max_date_range_days = max_date_range_days
 
 
-class PartitionCheckViolation(Enum):
+class PartitionViolationType(Enum):
     """Type of partition check violation."""
 
     MISSING_DAY_FILTER = "MISSING_DAY_FILTER"
@@ -76,10 +76,10 @@ class PartitionCheckViolation(Enum):
 
 
 @dataclass
-class PartitionCheckResult:
+class PartitionViolation:
     """Result of partition validation check representing a violation."""
 
-    violation: PartitionCheckViolation
+    violation: PartitionViolationType
     message: str
     table_name: str | None = None
     estimated_days: int | None = None
@@ -113,7 +113,7 @@ class PartitionChecker:
                 )
             self._partition_configs[key] = pc
 
-    def check_query(self, sql: str) -> list[PartitionCheckResult]:
+    def find_violations(self, sql: str) -> list[PartitionViolation]:
         """
         Check a SQL query for proper partition usage.
 
@@ -121,7 +121,7 @@ class PartitionChecker:
             sql: The SQL query to validate.
 
         Returns:
-            List of PartitionCheckResult objects for tables with violations.
+            List of PartitionViolation objects for tables with violations.
             Empty list if all partitioned tables are properly filtered.
             Returns a list with QUERY_INVALID_SYNTAX violation if query parsing fails.
         """
@@ -130,8 +130,8 @@ class PartitionChecker:
         except Exception as e:
             # If parsing fails, return QUERY_INVALID_SYNTAX violation
             return [
-                PartitionCheckResult(
-                    violation=PartitionCheckViolation.QUERY_INVALID_SYNTAX,
+                PartitionViolation(
+                    violation=PartitionViolationType.QUERY_INVALID_SYNTAX,
                     message=f"Failed to parse SQL query: {e!s}",
                     table_name=None,
                     estimated_days=None,
@@ -167,7 +167,7 @@ class PartitionChecker:
 
     def _check_table_partition_in_specific_sql(
             self, select_sql: exp.Expression, partition_config: PartitionColumn
-    ) -> PartitionCheckResult | None:
+    ) -> PartitionViolation | None:
         """
         Check partition requirements for a specific table referenced in the FROM clause of the SQL query.
 
@@ -176,7 +176,7 @@ class PartitionChecker:
             partition_config: PartitionColumn configuration for the table.
 
         Returns:
-            PartitionCheckResult with violation details if validation fails, None if valid.
+            PartitionViolation with violation details if validation fails, None if valid.
         """
         column_name = partition_config.column_name
         table_name = partition_config.get_nonqualified_table_name()
@@ -185,8 +185,8 @@ class PartitionChecker:
         where_clauses = list(select_sql.find_all(exp.Where))
 
         if not where_clauses:
-            return PartitionCheckResult(
-                violation=PartitionCheckViolation.MISSING_DAY_FILTER,
+            return PartitionViolation(
+                violation=PartitionViolationType.MISSING_DAY_FILTER,
                 message=f"Table '{table_name}' is used without a WHERE clause containing a '{column_name}' filter",
                 table_name=table_name,
             )
@@ -198,8 +198,8 @@ class PartitionChecker:
             partition_conditions.extend(conditions)
 
         if not partition_conditions:
-            return PartitionCheckResult(
-                violation=PartitionCheckViolation.MISSING_DAY_FILTER,
+            return PartitionViolation(
+                violation=PartitionViolationType.MISSING_DAY_FILTER,
                 message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
                 table_name=table_name,
             )
@@ -207,8 +207,8 @@ class PartitionChecker:
         # Check if partition column is used without functions
         for condition in partition_conditions:
             if self._has_function_on_column(condition, column_name):
-                return PartitionCheckResult(
-                    violation=PartitionCheckViolation.DAY_FILTER_WITH_FUNCTION,
+                return PartitionViolation(
+                    violation=PartitionViolationType.DAY_FILTER_WITH_FUNCTION,
                     message=(
                         f"Table '{table_name}' uses '{column_name}' column with a function, "
                         "which disables partitioning. "
@@ -219,8 +219,8 @@ class PartitionChecker:
 
         # Check for finite range
         if not self._has_finite_range(partition_conditions):
-            return PartitionCheckResult(
-                violation=PartitionCheckViolation.NO_FINITE_RANGE,
+            return PartitionViolation(
+                violation=PartitionViolationType.NO_FINITE_RANGE,
                 message=(
                     f"Table '{table_name}' does not have a finite date range. "
                     "Use BETWEEN or combination of >= and <= operators."
@@ -233,8 +233,8 @@ class PartitionChecker:
             max_days = partition_config.max_date_range_days
             estimated_days = self._estimate_date_range(partition_conditions)
             if estimated_days is not None and estimated_days > max_days:
-                return PartitionCheckResult(
-                    violation=PartitionCheckViolation.EXCESSIVE_DATE_RANGE,
+                return PartitionViolation(
+                    violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
                     message=(
                         f"Table '{table_name}' has an excessive date range of approximately "
                         f"{estimated_days} days (max: {max_days})"
@@ -247,7 +247,7 @@ class PartitionChecker:
 
     def _check_table_partition_hierarchically(
         self, select_sql: exp.Expression, table_name: str, partition_config: PartitionColumn
-    ) -> list[PartitionCheckResult]:
+    ) -> list[PartitionViolation]:
         """
         Check partition requirements for a specific table in the specific SQL query.
 
@@ -257,7 +257,7 @@ class PartitionChecker:
             partition_config: PartitionColumn configuration for the table.
 
         Returns:
-            List of PartitionCheckResult with violation details if validation fails, empty if valid.
+            List of PartitionViolation with violation details if validation fails, empty if valid.
         """
         results = []
         from_clauses = filter(
@@ -514,7 +514,7 @@ class PartitionChecker:
 def check_partition_usage(
         sql: str,
         partitioned_tables: list[PartitionColumn],
-) -> list[PartitionCheckResult]:
+) -> list[PartitionViolation]:
     """
     Convenience function to check SQL query for proper partition usage.
 
@@ -523,7 +523,7 @@ def check_partition_usage(
         partitioned_tables: List of PartitionColumn objects defining partition configuration.
 
     Returns:
-        List of PartitionCheckResult objects for tables with violations.
+        List of PartitionViolation objects for tables with violations.
         Empty list if all partitioned tables are properly filtered.
         Returns a list with QUERY_INVALID_SYNTAX violation if query parsing fails.
 
@@ -537,4 +537,4 @@ def check_partition_usage(
         0
     """
     checker = PartitionChecker(partitioned_tables=partitioned_tables)
-    return checker.check_query(sql)
+    return checker.find_violations(sql)
