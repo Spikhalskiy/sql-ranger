@@ -311,7 +311,7 @@ class PartitionChecker:
             column: Column
             condition: Expression the column belongs to
         """
-        tables = {table.alias.lower() : table for table in list(condition.parent_select.find_all(exp.Table))}
+        tables = {table.alias.lower(): table for table in list(condition.parent_select.find_all(exp.Table))}
         return tables.get(column.table.lower(), None)
 
     def _references_column_of_table(self, condition: exp.Expression, table_name: str, column_name: str) -> bool:
@@ -326,9 +326,13 @@ class PartitionChecker:
         Returns:
             True if the expression references the specified column of the table.
         """
-        return any(column.name and column.name.lower() == column_name.lower()
-                   and self._get_expr_column_table(column, condition).name.lower() == table_name.lower()
-                   for column in condition.find_all(exp.Column))
+        for column in condition.find_all(exp.Column):
+            if not (column.name and column.name.lower() == column_name.lower()):
+                continue
+            table = self._get_expr_column_table(column, condition)
+            if table and table.name.lower() == table_name.lower():
+                return True
+        return False
 
     def _has_function_on_column(self, condition: exp.Expression, column_name: str) -> bool:
         """
