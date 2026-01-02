@@ -205,6 +205,16 @@ class PartitionChecker:
         """
         return any(column.name and column.name.lower() == "day" for column in condition.find_all(exp.Column))
 
+    def _get_expr_collumn_table(self, column: exp.Column, condition: exp.Expression) -> exp.Table | None:
+        """
+        Get the table from the condition's parent select for a given column.
+
+        Args:
+            column: Column
+            condition: Expression the column belongs to
+        """
+        tables = {table.alias.lower() : table for table in list(condition.parent_select.find_all(exp.Table))}
+        return tables.get(column.table.lower(), None)
 
     def _references_day_column_of_table(self, condition: exp.Expression, table_name: str) -> bool:
         """
@@ -217,9 +227,8 @@ class PartitionChecker:
         Returns:
             True if the expression references a 'day' column.
         """
-        tables = {table.alias.lower() : table for table in list(condition.parent_select.find_all(exp.Table))}
         return any(column.name and column.name.lower() == "day"
-                   and tables.get(column.table.lower(), None).name.lower() == table_name.lower()
+                   and self._get_expr_collumn_table(column, condition).name.lower() == table_name.lower()
                    for column in condition.find_all(exp.Column))
 
     def _has_function_on_day_column(self, condition: exp.Expression) -> bool:
@@ -330,12 +339,11 @@ class PartitionChecker:
             Datetime object if date can be extracted, None otherwise.
         """
         # Get the right side of the comparison (assuming day column is on the left)
-        if hasattr(condition, "expression") and hasattr(condition, "this"):
-            # Check which side has the day column
-            if self._references_day_column(condition.this):
-                return self._extract_date_value(condition.expression)
-            if self._references_day_column(condition.expression):
-                return self._extract_date_value(condition.this)
+        # Check which side has the day column
+        if self._references_day_column(condition.this):
+            return self._extract_date_value(condition.expression)
+        if self._references_day_column(condition.expression):
+            return self._extract_date_value(condition.this)
 
         return None
 
