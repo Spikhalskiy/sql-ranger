@@ -812,7 +812,7 @@ class TestHierarchicalPartitions:
 
         sql = """
               SELECT * FROM sales.history
-              WHERE day == '2021-09-01' AND hour >= 00 AND hour <= 14
+              WHERE day = '2021-09-01' AND hour >= 00 AND hour <= 14
               """
         results = checker.find_violations(sql)
         assert len(results) == 1
@@ -830,14 +830,43 @@ class TestHierarchicalPartitions:
 
         sql = """
               SELECT * FROM sales.history
-              WHERE day == '2021-09-01' AND hour == 00
+              WHERE day = '2021-09-01' AND hour == 00
               """
         results = checker.find_violations(sql)
         assert len(results) == 0
 
         sql = """
               SELECT * FROM sales.history
-              WHERE day == '2021-09-01' AND hour >= 00 AND hour <= 01
+              WHERE day = '2021-09-01' AND hour >= 00 AND hour <= 01
+              """
+        results = checker.find_violations(sql)
+        assert len(results) == 0
+
+        checker = PartitionChecker(partitioned_tables=[
+            DateTablePartition("history", [
+                DatePartitionColumn("month", "YYYY-MM"),
+                DatePartitionColumn("day", "dd"),
+                DatePartitionColumn("hour", "HH"),
+            ], max_date_range=timedelta(hours=2))
+        ])
+        sql = """
+              SELECT * FROM sales.history
+              WHERE month = '2021-09' AND day = '01' hour >= 00 AND hour <= 01
+              """
+        results = checker.find_violations(sql)
+        assert len(results) == 0
+
+        checker = PartitionChecker(partitioned_tables=[
+            DateTablePartition("history", [
+                DatePartitionColumn("year", "YYYY"),
+                DatePartitionColumn("month", "MM"),
+                DatePartitionColumn("day", "dd"),
+                DatePartitionColumn("hour", "HH"),
+            ], max_date_range=timedelta(hours=2))
+        ])
+        sql = """
+              SELECT * FROM sales.history
+              WHERE year = '2025' AND month = '09' AND day = '01' hour >= 00 AND hour <= 01
               """
         results = checker.find_violations(sql)
         assert len(results) == 0
@@ -855,7 +884,7 @@ class TestHierarchicalPartitions:
 
         sql = """
               SELECT * FROM sales.history
-              WHERE day == '2021-09-01'
+              WHERE day = '2021-09-01'
               """
         results = checker.find_violations(sql)
         assert len(results) == 1
