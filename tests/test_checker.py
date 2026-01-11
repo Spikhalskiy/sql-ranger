@@ -830,7 +830,14 @@ class TestHierarchicalPartitions:
 
         sql = """
               SELECT * FROM sales.history
-              WHERE day == '2021-09-01' AND hour == 00 \
+              WHERE day == '2021-09-01' AND hour == 00
+              """
+        results = checker.find_violations(sql)
+        assert len(results) == 0
+
+        sql = """
+              SELECT * FROM sales.history
+              WHERE day == '2021-09-01' AND hour >= 00 AND hour <= 01
               """
         results = checker.find_violations(sql)
         assert len(results) == 0
