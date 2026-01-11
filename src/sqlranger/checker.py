@@ -257,18 +257,41 @@ class PartitionChecker:
                     table_name=table_name,
                 )
 
-        # Check date range if configured (only for DateTablePartition with first enforced column)
+        # Check date range if configured (only for DateTablePartition)
         if (isinstance(partition_config, DateTablePartition)
             and partition_config.max_date_range is not None
             and enforced_partitions):
+            # Collect conditions for all enforced partition columns
+            all_conditions_by_column = {}
+            for column_name in enforced_partitions:
+                partition_conditions = []
+                for where in where_clauses:
+                    conditions = self._extract_partition_conditions(where, table_name, column_name)
+                    partition_conditions.extend(conditions)
+                all_conditions_by_column[column_name] = partition_conditions
+
+            # Check if all enforced columns have equality conditions
+            all_have_equality = all(
+                any(isinstance(cond, exp.EQ) for cond in conds)
+                for conds in all_conditions_by_column.values()
+            )
+
+            # Estimate the date range
+            # If all enforced columns have equality, the range is restricted to the finest granularity
+            # For hierarchical date partitions (e.g., day + hour), this means less than 1 day
             first_column = enforced_partitions[0]
-            partition_conditions = []
-            for where in where_clauses:
-                conditions = self._extract_partition_conditions(where, table_name, first_column)
-                partition_conditions.extend(conditions)
+            first_column_conditions = all_conditions_by_column[first_column]
+
+            if all_have_equality and len(enforced_partitions) > 1:
+                # All enforced columns have equality - range is at the finest granularity
+                # Use a fraction of a day based on the number of levels
+                # For example, if we have day + hour with both as equality, range is at most 1/24 day
+                estimated_days = 1.0 / (24 ** (len(enforced_partitions) - 1))
+            else:
+                # Estimate based on the first column
+                estimated_days = self._estimate_date_range(first_column_conditions)
 
             max_days = partition_config.max_date_range.total_seconds() / 86400
-            estimated_days = self._estimate_date_range(partition_conditions)
             if estimated_days is not None and estimated_days > max_days:
                 return PartitionViolation(
                     violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
