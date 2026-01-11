@@ -493,9 +493,9 @@ class PartitionChecker:
             if start_time and end_time:
                 # Calculate the difference
                 delta = end_time - start_time
-                # Add the granularity of the finest partition level to account for inclusive range
-                finest_granularity = self._get_finest_granularity(date_partitions, values_by_column)
-                return delta.total_seconds() + finest_granularity
+                return delta.total_seconds() if delta.total_seconds() > 0 else (
+                    # handle equality correctly
+                    self._get_finest_granularity(date_partitions, values_by_column))
 
         except (ValueError, TypeError):
             # If we can't build valid datetimes, fall back to None
@@ -536,7 +536,7 @@ class PartitionChecker:
                 if val is not None and (max_val is None or val > max_val):
                     max_val = val
 
-        return (min_val, max_val)
+        return min_val, max_val
 
     def _extract_literal_value(self, expr: exp.Expression | None) -> str | None:
         """Extract a literal value as a string from an expression."""
@@ -642,6 +642,7 @@ class PartitionChecker:
     ) -> float:
         """
         Get the finest granularity in seconds for the finest partition level that has conditions.
+        This handles when the query has a == check to estimate the length of the targeted time range.
 
         Returns:
             Granularity in seconds (e.g., 3600 for hour, 86400 for day)
