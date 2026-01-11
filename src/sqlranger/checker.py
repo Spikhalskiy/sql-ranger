@@ -261,32 +261,53 @@ class PartitionChecker:
         if (isinstance(partition_config, DateTablePartition)
             and partition_config.max_date_range is not None
             and enforced_partitions):
-            # Collect conditions for all enforced partition columns
-            all_conditions = []
+            # Collect conditions for each enforced partition column
+            conditions_by_column = {}
             for column_name in enforced_partitions:
+                column_conditions = []
                 for where in where_clauses:
                     conditions = self._extract_partition_conditions(where, table_name, column_name)
-                    all_conditions.extend(conditions)
+                    column_conditions.extend(conditions)
+                conditions_by_column[column_name] = column_conditions
 
-            # Check if we have equality conditions for multiple partition levels
-            # If so, the range is restricted by the finest granularity level
-            equality_count = sum(1 for cond in all_conditions if isinstance(cond, exp.EQ))
+            # Calculate the effective range considering all partition levels
+            # Strategy: Find the finest level with a range filter and calculate from there
+            estimated_seconds = None
 
-            # If we have equality on multiple levels, the range is at the finest granularity
-            # For example: day='2021-09-01' AND hour=00 means 1 hour, not 1 day
-            if equality_count >= len(enforced_partitions):
-                # All enforced levels have equality - use finest granularity
-                # Assume each level divides by 24 (day->hour), 60 (hour->minute), etc.
-                # For day+hour with both equality, range is 1 hour = 3600 seconds
-                estimated_seconds = 86400.0 / (24 ** (len(enforced_partitions) - 1))
-            else:
-                # Use the first column to estimate range
-                first_column = enforced_partitions[0]
-                first_column_conditions = []
-                for where in where_clauses:
-                    conditions = self._extract_partition_conditions(where, table_name, first_column)
-                    first_column_conditions.extend(conditions)
-                estimated_seconds = self._estimate_date_range(first_column_conditions)
+            for i, column_name in enumerate(enforced_partitions):
+                column_conditions = conditions_by_column[column_name]
+                if not column_conditions:
+                    continue
+
+                # Check if this level has equality (fixes this dimension)
+                has_equality = any(isinstance(cond, exp.EQ) for cond in column_conditions)
+
+                if i == 0:
+                    # First level (e.g., day) - this is the coarsest granularity
+                    if has_equality:
+                        # Fixed day - range will be determined by lower levels
+                        # If no lower level has range, assume 1 day
+                        estimated_seconds = 86400.0
+                    else:
+                        # Range at day level
+                        estimated_seconds = self._estimate_date_range(column_conditions)
+                        break  # Day range is our estimate
+                else:
+                    # Lower levels (e.g., hour) - finer granularity
+                    if has_equality:
+                        # Fixed at this level too
+                        # Divide the range by the granularity (24 for hours, 60 for minutes, etc.)
+                        if estimated_seconds:
+                            estimated_seconds = estimated_seconds / 24  # Assume hour level divides day by 24
+                    else:
+                        # Range at this finer level - this is what we want to use
+                        # For hour: range is in hours, need to convert to seconds
+                        numeric_range = self._estimate_numeric_range(column_conditions)
+                        if numeric_range is not None:
+                            # Assume this is an hour range, convert to seconds
+                            # Each unit at this level is 1 hour = 3600 seconds
+                            estimated_seconds = numeric_range * 3600.0
+                        break  # Use this finer level's range
 
             max_seconds = partition_config.max_date_range.total_seconds()
             if estimated_seconds is not None and estimated_seconds > max_seconds:
@@ -501,6 +522,73 @@ class PartitionChecker:
 
         if start_date and end_date:
             return (end_date - start_date).total_seconds() + 86400.0  # +1 day for inclusive range
+
+        return None
+
+    def _estimate_numeric_range(self, conditions: list[exp.Expression]) -> float | None:
+        """
+        Estimate a numeric range from conditions (e.g., hour ranges).
+
+        Args:
+            conditions: List of conditions on a numeric column.
+
+        Returns:
+            The range as a numeric value, or None if cannot be estimated.
+        """
+        start_val: float | None = None
+        end_val: float | None = None
+
+        for condition in conditions:
+            if isinstance(condition, exp.Between):
+                # Extract numeric values from BETWEEN clause
+                low = self._extract_numeric_value(condition.args.get("low"))
+                high = self._extract_numeric_value(condition.args.get("high"))
+                if low is not None and high is not None:
+                    start_val = low
+                    end_val = high
+                    break
+            elif isinstance(condition, exp.EQ):
+                # Single value
+                val = self._extract_numeric_from_comparison(condition)
+                if val is not None:
+                    return 1.0  # Single unit
+            elif isinstance(condition, (exp.GTE, exp.GT)):
+                val = self._extract_numeric_from_comparison(condition)
+                if val is not None and (start_val is None or val < start_val):
+                    start_val = val
+            elif isinstance(condition, (exp.LTE, exp.LT)):
+                val = self._extract_numeric_from_comparison(condition)
+                if val is not None and (end_val is None or val > end_val):
+                    end_val = val
+
+        if start_val is not None and end_val is not None:
+            return end_val - start_val + 1.0  # +1 for inclusive range
+
+        return None
+
+    def _extract_numeric_value(self, expr: exp.Expression | None) -> float | None:
+        """Extract a numeric value from an expression."""
+        if expr is None:
+            return None
+
+        if isinstance(expr, exp.Literal):
+            try:
+                return float(expr.this)
+            except (ValueError, TypeError):
+                return None
+
+        return None
+
+    def _extract_numeric_from_comparison(self, condition: exp.Expression) -> float | None:
+        """Extract a numeric value from a comparison expression."""
+        # Check which side has a column reference
+        has_column_left = any(isinstance(n, exp.Column) for n in condition.this.walk())
+        has_column_right = any(isinstance(n, exp.Column) for n in condition.expression.walk())
+
+        if has_column_left and not has_column_right:
+            return self._extract_numeric_value(condition.expression)
+        if has_column_right and not has_column_left:
+            return self._extract_numeric_value(condition.this)
 
         return None
 
