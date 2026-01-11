@@ -262,37 +262,36 @@ class PartitionChecker:
             and partition_config.max_date_range is not None
             and enforced_partitions):
             # Collect conditions for all enforced partition columns
-            all_conditions_by_column = {}
+            all_conditions = []
             for column_name in enforced_partitions:
-                partition_conditions = []
                 for where in where_clauses:
                     conditions = self._extract_partition_conditions(where, table_name, column_name)
-                    partition_conditions.extend(conditions)
-                all_conditions_by_column[column_name] = partition_conditions
+                    all_conditions.extend(conditions)
 
-            # Check if all enforced columns have equality conditions
-            all_have_equality = all(
-                any(isinstance(cond, exp.EQ) for cond in conds)
-                for conds in all_conditions_by_column.values()
-            )
+            # Check if we have equality conditions for multiple partition levels
+            # If so, the range is restricted by the finest granularity level
+            equality_count = sum(1 for cond in all_conditions if isinstance(cond, exp.EQ))
 
-            # Estimate the date range
-            # If all enforced columns have equality, the range is restricted to the finest granularity
-            # For hierarchical date partitions (e.g., day + hour), this means less than 1 day
-            first_column = enforced_partitions[0]
-            first_column_conditions = all_conditions_by_column[first_column]
-
-            if all_have_equality and len(enforced_partitions) > 1:
-                # All enforced columns have equality - range is at the finest granularity
-                # Use a fraction of a day based on the number of levels
-                # For example, if we have day + hour with both as equality, range is at most 1/24 day
-                estimated_days = 1.0 / (24 ** (len(enforced_partitions) - 1))
+            # If we have equality on multiple levels, the range is at the finest granularity
+            # For example: day='2021-09-01' AND hour=00 means 1 hour, not 1 day
+            if equality_count >= len(enforced_partitions):
+                # All enforced levels have equality - use finest granularity
+                # Assume each level divides by 24 (day->hour), 60 (hour->minute), etc.
+                # For day+hour with both equality, range is 1 hour = 3600 seconds
+                estimated_seconds = 86400.0 / (24 ** (len(enforced_partitions) - 1))
             else:
-                # Estimate based on the first column
-                estimated_days = self._estimate_date_range(first_column_conditions)
+                # Use the first column to estimate range
+                first_column = enforced_partitions[0]
+                first_column_conditions = []
+                for where in where_clauses:
+                    conditions = self._extract_partition_conditions(where, table_name, first_column)
+                    first_column_conditions.extend(conditions)
+                estimated_seconds = self._estimate_date_range(first_column_conditions)
 
-            max_days = partition_config.max_date_range.total_seconds() / 86400
-            if estimated_days is not None and estimated_days > max_days:
+            max_seconds = partition_config.max_date_range.total_seconds()
+            if estimated_seconds is not None and estimated_seconds > max_seconds:
+                estimated_days = estimated_seconds / 86400.0
+                max_days = max_seconds / 86400.0
                 return PartitionViolation(
                     violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
                     message=(
@@ -460,9 +459,9 @@ class PartitionChecker:
 
         return has_between or has_equals or (has_lower_bound and has_upper_bound)
 
-    def _estimate_date_range(self, conditions: list[exp.Expression]) -> int | None:
+    def _estimate_date_range(self, conditions: list[exp.Expression]) -> float | None:
         """
-        Estimate the date range in days from conditions.
+        Estimate the date range in seconds from conditions.
 
         This is a best-effort estimation that only works with:
         - String date literals in YYYY-MM-DD format
@@ -472,7 +471,7 @@ class PartitionChecker:
             conditions: List of day column conditions.
 
         Returns:
-            Estimated number of days, or None if cannot be estimated.
+            Estimated number of seconds, or None if cannot be estimated.
         """
         start_date: datetime | None = None
         end_date: datetime | None = None
@@ -487,10 +486,10 @@ class PartitionChecker:
                     end_date = high
                     break
             elif isinstance(condition, exp.EQ):
-                # Single date
+                # Single date - assume 1 day in seconds
                 date_val = self._extract_date_from_comparison(condition)
                 if date_val:
-                    return 1
+                    return 86400.0  # 1 day in seconds
             elif isinstance(condition, (exp.GTE, exp.GT)):
                 date_val = self._extract_date_from_comparison(condition)
                 if date_val and (start_date is None or date_val < start_date):
@@ -501,7 +500,7 @@ class PartitionChecker:
                     end_date = date_val
 
         if start_date and end_date:
-            return (end_date - start_date).days + 1
+            return (end_date - start_date).total_seconds() + 86400.0  # +1 day for inclusive range
 
         return None
 
