@@ -95,7 +95,7 @@ class PartitionViolationType(Enum):
     """Type of partition check violation."""
 
     MISSING_DAY_FILTER = "MISSING_DAY_FILTER"
-    DAY_FILTER_WITH_FUNCTION = "DAY_FILTER_WITH_FUNCTION"
+    PARTITION_COLUMN_WITH_FUNCTION = "PARTITION_COLUMN_WITH_FUNCTION"
     NO_FINITE_RANGE = "NO_FINITE_RANGE"
     EXCESSIVE_DATE_RANGE = "EXCESSIVE_DATE_RANGE"
     QUERY_INVALID_SYNTAX = "QUERY_INVALID_SYNTAX"
@@ -237,7 +237,7 @@ class PartitionChecker:
             for condition in partition_conditions:
                 if self._has_function_on_column(condition, column_name):
                     return PartitionViolation(
-                        violation=PartitionViolationType.DAY_FILTER_WITH_FUNCTION,
+                        violation=PartitionViolationType.PARTITION_COLUMN_WITH_FUNCTION,
                         message=(
                             f"Table '{table_name}' uses '{column_name}' column with a function, "
                             "which disables partitioning. "

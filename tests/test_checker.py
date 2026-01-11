@@ -109,7 +109,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.DAY_FILTER_WITH_FUNCTION
+        assert results[0].violation == PartitionViolationType.PARTITION_COLUMN_WITH_FUNCTION
         assert "with a function" in results[0].message
 
     def test_day_filter_with_extract_function(self):
@@ -122,7 +122,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.DAY_FILTER_WITH_FUNCTION
+        assert results[0].violation == PartitionViolationType.PARTITION_COLUMN_WITH_FUNCTION
 
     def test_no_finite_range_only_greater(self):
         """Test query with only >= filter (no upper bound)."""
@@ -802,19 +802,55 @@ class TestHierarchicalPartitions:
         assert len(results) == 0  # No violations, day not required
 
     def test_hierarchical_date_partitions_with_max_range(self):
-        """Test hierarchical date partitions with max_date_range on single day column."""
-        sql = """
-        SELECT * FROM sales.history
-        WHERE day BETWEEN '2021-09-01' AND '2021-09-15'
-        """
+        """Test hierarchical date partitions range enforcement."""
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-MM-dd")
-            ], max_date_range=timedelta(days=10))
+                DatePartitionColumn("day", "YYYY-MM-dd"),
+                DatePartitionColumn("hour", "HH"),
+            ], max_date_range=timedelta(hours=2))
         ])
-        results = checker.find_violations(sql)
 
-        # Should have excessive range violation (15 days > 10 max)
+        sql = """
+              SELECT * FROM sales.history
+              WHERE day == '2021-09-01' AND hour >= 00 AND hour <= 14
+              """
+        results = checker.find_violations(sql)
+        assert len(results) == 1
+        assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
+
+
+    def test_hierarchical_date_partitions_with_max_range_valid(self):
+        """Test hierarchical date partitions range enforcement with valid range."""
+        checker = PartitionChecker(partitioned_tables=[
+            DateTablePartition("history", [
+                DatePartitionColumn("day", "YYYY-MM-dd"),
+                DatePartitionColumn("hour", "HH"),
+            ], max_date_range=timedelta(hours=2))
+        ])
+
+        sql = """
+              SELECT * FROM sales.history
+              WHERE day == '2021-09-01' AND hour == 00 \
+              """
+        results = checker.find_violations(sql)
+        assert len(results) == 0
+
+    def test_hierarchical_date_partitions_with_max_range_enforce_higher_level_partitions(self):
+        """Test hierarchical date partitions range enforcement works correctly for higher-level partitions."""
+        checker = PartitionChecker(partitioned_tables=[
+            DateTablePartition("history", [
+                DatePartitionColumn("day", "YYYY-MM-dd"),
+                DatePartitionColumn("hour", "HH"),
+            ],
+            enforced_level=1, # we enforce only day partition level
+            max_date_range=timedelta(hours=2)) # but the range is formulated in hours
+        ])
+
+        sql = """
+              SELECT * FROM sales.history
+              WHERE day == '2021-09-01'
+              """
+        results = checker.find_violations(sql)
         assert len(results) == 1
         assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
 

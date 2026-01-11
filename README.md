@@ -245,7 +245,7 @@ The partition checker enforces these rules:
 | Violation | Description |
 |--------|-------------|
 | `MISSING_DAY_FILTER` | Query doesn't have a required partition column filter in the `WHERE` clause |
-| `DAY_FILTER_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
+| `PARTITION_COLUMN_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
 | `NO_FINITE_RANGE` | Query doesn't define a finite range for a partition column |
 | `EXCESSIVE_DATE_RANGE` | Date range exceeds the configured maximum |
 
@@ -277,7 +277,7 @@ Returns: `[]` (empty list - no violations)
 SELECT * FROM gridhive.fact.sales_history
 WHERE DATE_FORMAT(day, '%Y-%m') = '2021-09'
 ```
-Returns violation: `DAY_FILTER_WITH_FUNCTION` - Table 'sales_history' uses 'day' column with a function, which disables partitioning.
+Returns violation: `PARTITION_COLUMN_WITH_FUNCTION` - Table 'sales_history' uses 'day' column with a function, which disables partitioning.
 
 **Invalid Query (no upper bound):**
 ```sql
