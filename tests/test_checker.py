@@ -851,7 +851,7 @@ class TestHierarchicalPartitions:
         ])
         sql = """
               SELECT * FROM sales.history
-              WHERE month = '2021-09' AND day = '01' hour >= 00 AND hour <= 01
+              WHERE month = '2021-09' AND day = '01' AND hour >= 00 AND hour <= 01
               """
         results = checker.find_violations(sql)
         assert len(results) == 0
@@ -866,7 +866,7 @@ class TestHierarchicalPartitions:
         ])
         sql = """
               SELECT * FROM sales.history
-              WHERE year = '2025' AND month = '09' AND day = '01' hour >= 00 AND hour <= 01
+              WHERE year = '2025' AND month = '09' AND day = '01' AND hour >= 00 AND hour <= 01
               """
         results = checker.find_violations(sql)
         assert len(results) == 0

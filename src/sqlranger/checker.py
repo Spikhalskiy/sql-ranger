@@ -270,44 +270,10 @@ class PartitionChecker:
                     column_conditions.extend(conditions)
                 conditions_by_column[column_name] = column_conditions
 
-            # Calculate the effective range considering all partition levels
-            # Strategy: Find the finest level with a range filter and calculate from there
-            estimated_seconds = None
-
-            for i, column_name in enumerate(enforced_partitions):
-                column_conditions = conditions_by_column[column_name]
-                if not column_conditions:
-                    continue
-
-                # Check if this level has equality (fixes this dimension)
-                has_equality = any(isinstance(cond, exp.EQ) for cond in column_conditions)
-
-                if i == 0:
-                    # First level (e.g., day) - this is the coarsest granularity
-                    if has_equality:
-                        # Fixed day - range will be determined by lower levels
-                        # If no lower level has range, assume 1 day
-                        estimated_seconds = 86400.0
-                    else:
-                        # Range at day level
-                        estimated_seconds = self._estimate_date_range(column_conditions)
-                        break  # Day range is our estimate
-                else:
-                    # Lower levels (e.g., hour) - finer granularity
-                    if has_equality:
-                        # Fixed at this level too
-                        # Divide the range by the granularity (24 for hours, 60 for minutes, etc.)
-                        if estimated_seconds:
-                            estimated_seconds = estimated_seconds / 24  # Assume hour level divides day by 24
-                    else:
-                        # Range at this finer level - this is what we want to use
-                        # For hour: range is in hours, need to convert to seconds
-                        numeric_range = self._estimate_numeric_range(column_conditions)
-                        if numeric_range is not None:
-                            # Assume this is an hour range, convert to seconds
-                            # Each unit at this level is 1 hour = 3600 seconds
-                            estimated_seconds = numeric_range * 3600.0
-                        break  # Use this finer level's range
+            # Estimate the time range from all partition levels combined
+            estimated_seconds = self._estimate_hierarchical_time_range(
+                conditions_by_column, partition_config.date_partitions
+            )
 
             max_seconds = partition_config.max_date_range.total_seconds()
             if estimated_seconds is not None and estimated_seconds > max_seconds:
@@ -480,6 +446,230 @@ class PartitionChecker:
 
         return has_between or has_equals or (has_lower_bound and has_upper_bound)
 
+    def _estimate_hierarchical_time_range(
+        self,
+        conditions_by_column: dict[str, list[exp.Expression]],
+        date_partitions: list,
+    ) -> float | None:
+        """
+        Estimate time range from hierarchical date partition conditions.
+
+        This function handles all levels of date/time partitions uniformly by:
+        1. Extracting min/max values from all partition levels
+        2. Building start and end times from the combined values
+        3. Calculating the time difference in seconds
+
+        Args:
+            conditions_by_column: Dictionary mapping column names to their conditions
+            date_partitions: List of DatePartitionColumn objects with format info
+
+        Returns:
+            Estimated range in seconds, or None if cannot be estimated
+        """
+        # Extract value ranges for each partition level
+        values_by_column = {}
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            conditions = conditions_by_column.get(column_name, [])
+            if not conditions:
+                continue
+
+            min_val, max_val = self._extract_value_range(conditions)
+            values_by_column[column_name] = (min_val, max_val)
+
+        if not values_by_column:
+            return None
+
+        # Build datetime objects from the extracted values
+        # We need to determine start and end times from all partition levels
+        try:
+            start_time = self._build_datetime_from_partitions(
+                values_by_column, date_partitions, use_min=True
+            )
+            end_time = self._build_datetime_from_partitions(
+                values_by_column, date_partitions, use_min=False
+            )
+
+            if start_time and end_time:
+                # Calculate the difference
+                delta = end_time - start_time
+                # Add the granularity of the finest partition level to account for inclusive range
+                finest_granularity = self._get_finest_granularity(date_partitions, values_by_column)
+                return delta.total_seconds() + finest_granularity
+
+        except (ValueError, TypeError):
+            # If we can't build valid datetimes, fall back to None
+            pass
+
+        return None
+
+    def _extract_value_range(self, conditions: list[exp.Expression]) -> tuple[str | None, str | None]:
+        """
+        Extract the min and max values from a list of conditions.
+
+        Returns:
+            Tuple of (min_value, max_value) as strings, or (None, None)
+        """
+        min_val: str | None = None
+        max_val: str | None = None
+
+        for condition in conditions:
+            if isinstance(condition, exp.Between):
+                # Extract from BETWEEN clause
+                low = self._extract_literal_value(condition.args.get("low"))
+                high = self._extract_literal_value(condition.args.get("high"))
+                if low is not None and high is not None:
+                    min_val = low
+                    max_val = high
+                    break
+            elif isinstance(condition, exp.EQ):
+                # Single value - min and max are the same
+                val = self._extract_literal_from_comparison(condition)
+                if val is not None:
+                    min_val = max_val = val
+            elif isinstance(condition, (exp.GTE, exp.GT)):
+                val = self._extract_literal_from_comparison(condition)
+                if val is not None and (min_val is None or val < min_val):
+                    min_val = val
+            elif isinstance(condition, (exp.LTE, exp.LT)):
+                val = self._extract_literal_from_comparison(condition)
+                if val is not None and (max_val is None or val > max_val):
+                    max_val = val
+
+        return (min_val, max_val)
+
+    def _extract_literal_value(self, expr: exp.Expression | None) -> str | None:
+        """Extract a literal value as a string from an expression."""
+        if expr is None:
+            return None
+
+        if isinstance(expr, exp.Literal):
+            return str(expr.this)
+
+        return None
+
+    def _extract_literal_from_comparison(self, condition: exp.Expression) -> str | None:
+        """Extract a literal value from a comparison expression."""
+        # Check which side has a column reference
+        has_column_left = any(isinstance(n, exp.Column) for n in condition.this.walk())
+        has_column_right = any(isinstance(n, exp.Column) for n in condition.expression.walk())
+
+        if has_column_left and not has_column_right:
+            return self._extract_literal_value(condition.expression)
+        if has_column_right and not has_column_left:
+            return self._extract_literal_value(condition.this)
+
+        return None
+
+    def _build_datetime_from_partitions(
+        self,
+        values_by_column: dict[str, tuple[str | None, str | None]],
+        date_partitions: list,
+        use_min: bool,
+    ) -> datetime | None:
+        """
+        Build a datetime object from partition values.
+
+        Args:
+            values_by_column: Dictionary of column names to (min, max) value tuples
+            date_partitions: List of DatePartitionColumn objects
+            use_min: If True, use min values; if False, use max values
+
+        Returns:
+            datetime object or None
+        """
+        # Default values for datetime components
+        year = 1970
+        month = 1
+        day = 1
+        hour = 0
+        minute = 0
+        second = 0
+
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            if column_name not in values_by_column:
+                continue
+
+            min_val, max_val = values_by_column[column_name]
+            value = min_val if use_min else max_val
+            if value is None:
+                continue
+
+            # Parse the value based on the format pattern
+            format_pattern = date_partition.format_pattern
+            try:
+                # Handle full date strings first - be flexible with case
+                has_date_sep = ("-dd" in format_pattern or "-DD" in format_pattern)
+                if ("YYYY-MM" in format_pattern or "YYYY-mm" in format_pattern) and has_date_sep:
+                    # Full date string like "2021-09-13"
+                    parts = value.split("-")
+                    if len(parts) == 3:
+                        year = int(parts[0])
+                        month = int(parts[1])
+                        day = int(parts[2])
+                elif "YYYY-MM" in format_pattern or "YYYY-mm" in format_pattern:
+                    # Year-month string like "2021-09"
+                    parts = value.split("-")
+                    if len(parts) == 2:
+                        year = int(parts[0])
+                        month = int(parts[1])
+                elif "YYYY" in format_pattern.upper() or format_pattern.upper() == "Y":
+                    year = int(value)
+                elif "MM" in format_pattern.upper() or format_pattern.upper() == "M":
+                    month = int(value)
+                elif "DD" in format_pattern.upper() or format_pattern.lower() == "dd" or format_pattern.upper() == "D":
+                    day = int(value)
+                elif "HH" in format_pattern.upper() or format_pattern.upper() == "H":
+                    hour = int(value)
+                elif "mm" in format_pattern and "HH" not in format_pattern and "YYYY" not in format_pattern:
+                    # minute (lowercase mm when not part of YYYY-MM)
+                    minute = int(value)
+                elif "SS" in format_pattern.upper() or format_pattern.upper() == "S":
+                    second = int(value)
+            except (ValueError, IndexError):
+                continue
+
+        try:
+            return datetime(year, month, day, hour, minute, second)
+        except ValueError:
+            return None
+
+    def _get_finest_granularity(
+        self,
+        date_partitions: list,
+        values_by_column: dict[str, tuple[str | None, str | None]],
+    ) -> float:
+        """
+        Get the finest granularity in seconds for the finest partition level that has conditions.
+
+        Returns:
+            Granularity in seconds (e.g., 3600 for hour, 86400 for day)
+        """
+        # Check from finest to coarsest
+        for date_partition in reversed(date_partitions):
+            if date_partition.column_name in values_by_column:
+                format_pattern = date_partition.format_pattern
+                format_upper = format_pattern.upper()
+
+                if "SS" in format_upper or format_upper == "S":
+                    return 1.0  # second
+                if "mm" in format_pattern and "HH" not in format_upper:
+                    return 60.0  # minute
+                if "HH" in format_upper or format_upper == "H":
+                    return 3600.0  # hour
+                if "DD" in format_upper or "dd" in format_pattern or format_upper == "D":
+                    return 86400.0  # day
+                if "-DD" in format_upper or "-dd" in format_pattern:
+                    # Part of a full date string
+                    return 86400.0  # day
+                if "MM" in format_upper or format_upper == "M":
+                    return 86400.0 * 30  # month (approximate)
+                if "YYYY" in format_upper or format_upper == "Y":
+                    return 86400.0 * 365  # year (approximate)
+
+        return 86400.0  # default to day
+
     def _estimate_date_range(self, conditions: list[exp.Expression]) -> float | None:
         """
         Estimate the date range in seconds from conditions.
@@ -522,73 +712,6 @@ class PartitionChecker:
 
         if start_date and end_date:
             return (end_date - start_date).total_seconds() + 86400.0  # +1 day for inclusive range
-
-        return None
-
-    def _estimate_numeric_range(self, conditions: list[exp.Expression]) -> float | None:
-        """
-        Estimate a numeric range from conditions (e.g., hour ranges).
-
-        Args:
-            conditions: List of conditions on a numeric column.
-
-        Returns:
-            The range as a numeric value, or None if cannot be estimated.
-        """
-        start_val: float | None = None
-        end_val: float | None = None
-
-        for condition in conditions:
-            if isinstance(condition, exp.Between):
-                # Extract numeric values from BETWEEN clause
-                low = self._extract_numeric_value(condition.args.get("low"))
-                high = self._extract_numeric_value(condition.args.get("high"))
-                if low is not None and high is not None:
-                    start_val = low
-                    end_val = high
-                    break
-            elif isinstance(condition, exp.EQ):
-                # Single value
-                val = self._extract_numeric_from_comparison(condition)
-                if val is not None:
-                    return 1.0  # Single unit
-            elif isinstance(condition, (exp.GTE, exp.GT)):
-                val = self._extract_numeric_from_comparison(condition)
-                if val is not None and (start_val is None or val < start_val):
-                    start_val = val
-            elif isinstance(condition, (exp.LTE, exp.LT)):
-                val = self._extract_numeric_from_comparison(condition)
-                if val is not None and (end_val is None or val > end_val):
-                    end_val = val
-
-        if start_val is not None and end_val is not None:
-            return end_val - start_val + 1.0  # +1 for inclusive range
-
-        return None
-
-    def _extract_numeric_value(self, expr: exp.Expression | None) -> float | None:
-        """Extract a numeric value from an expression."""
-        if expr is None:
-            return None
-
-        if isinstance(expr, exp.Literal):
-            try:
-                return float(expr.this)
-            except (ValueError, TypeError):
-                return None
-
-        return None
-
-    def _extract_numeric_from_comparison(self, condition: exp.Expression) -> float | None:
-        """Extract a numeric value from a comparison expression."""
-        # Check which side has a column reference
-        has_column_left = any(isinstance(n, exp.Column) for n in condition.this.walk())
-        has_column_right = any(isinstance(n, exp.Column) for n in condition.expression.walk())
-
-        if has_column_left and not has_column_right:
-            return self._extract_numeric_value(condition.expression)
-        if has_column_right and not has_column_left:
-            return self._extract_numeric_value(condition.this)
 
         return None
 
