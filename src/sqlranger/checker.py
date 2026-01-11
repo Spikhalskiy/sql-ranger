@@ -5,26 +5,41 @@ This module provides functionality to verify that SQL queries accessing partitio
 include proper partition filters (day column) to ensure efficient query execution.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 import sqlglot
 from sqlglot import exp
 
 
-class PartitionColumn:
-    """Configuration for a partitioned table column."""
+@dataclass
+class DatePartitionColumn:
+    """Configuration for a single date partition column with its format pattern."""
 
-    def __init__(self, table_name: str, column_name: str):
+    column_name: str
+    format_pattern: str
+
+
+class TablePartition:
+    """Configuration for a partitioned table with hierarchical partition columns."""
+
+    def __init__(
+        self,
+        table_name: str,
+        partitions: list[str],
+        enforced_level: int | None = None,
+    ):
         """
-        Initialize the PartitionColumn.
+        Initialize the TablePartition.
 
         Args:
             table_name: Full table name (e.g., 'gridhive.fact.sales_history').
-            column_name: Name of the partition column (e.g., 'day').
+            partitions: Ordered list of partition column names from root to smallest sub-partition.
+            enforced_level: Number of partition levels to enforce. If None, all partitions are enforced.
         """
         self.table_name = table_name
-        self.column_name = column_name
+        self.partitions = partitions
+        self.enforced_level = enforced_level if enforced_level is not None else len(partitions)
 
     def get_nonqualified_table_name(self) -> str:
         """
@@ -34,35 +49,46 @@ class PartitionColumn:
             Short table name without schema/catalog prefix.
 
         Example:
-            >>> pc = PartitionColumn('gridhive.fact.sales_history', 'day')
-            >>> pc.get_nonqualified_table_name()
+            >>> tp = TablePartition('gridhive.fact.sales_history', ['day'])
+            >>> tp.get_nonqualified_table_name()
             'sales_history'
         """
         return self.table_name.split(".")[-1]
 
+    def get_enforced_partitions(self) -> list[str]:
+        """
+        Get the list of enforced partition columns.
 
-class DatePartitionColumn(PartitionColumn):
-    """Configuration for a date-partitioned table column."""
+        Returns:
+            List of partition column names that must be filtered.
+        """
+        return self.partitions[:self.enforced_level]
+
+
+class DateTablePartition(TablePartition):
+    """Configuration for a date-partitioned table with hierarchical date partition columns."""
 
     def __init__(
         self,
         table_name: str,
-        column_name: str,
-        date_pattern: str,
-        max_date_range_days: int | None = None,
+        partitions: list[DatePartitionColumn],
+        enforced_level: int | None = None,
+        max_date_range: timedelta | None = None,
     ):
         """
-        Initialize the DatePartitionColumn.
+        Initialize the DateTablePartition.
 
         Args:
             table_name: Full table name (e.g., 'gridhive.fact.sales_history').
-            column_name: Name of the partition column (e.g., 'day').
-            date_pattern: Date format pattern (e.g., 'YYYY-MM-dd').
-            max_date_range_days: Maximum allowed date range in days. If None, range is not checked.
+            partitions: Ordered list of DatePartitionColumn objects from root to smallest sub-partition.
+            enforced_level: Number of partition levels to enforce. If None, all partitions are enforced.
+            max_date_range: Maximum allowed date range as timedelta. If None, range is not checked.
         """
-        super().__init__(table_name, column_name)
-        self.date_pattern = date_pattern
-        self.max_date_range_days = max_date_range_days
+        # Extract column names for parent class
+        column_names = [p.column_name for p in partitions]
+        super().__init__(table_name, column_names, enforced_level)
+        self.date_partitions = partitions
+        self.max_date_range = max_date_range
 
 
 class PartitionViolationType(Enum):
@@ -88,12 +114,12 @@ class PartitionViolation:
 class PartitionChecker:
     """Validates SQL queries for proper partition usage on specified tables."""
 
-    def __init__(self, partitioned_tables: list[PartitionColumn]):
+    def __init__(self, partitioned_tables: list[TablePartition]):
         """
         Initialize the PartitionChecker.
 
         Args:
-            partitioned_tables: List of PartitionColumn objects defining partition configuration.
+            partitioned_tables: List of TablePartition objects defining partition configuration.
 
         Raises:
             ValueError: If multiple tables with the same non-qualified name are configured.
@@ -101,7 +127,7 @@ class PartitionChecker:
         # Build configuration mapping keyed by non-qualified table name, while
         # validating that there are no duplicate short names which would cause
         # configurations to be silently overwritten.
-        self._partition_configs: dict[str, PartitionColumn] = {}
+        self._partition_configs: dict[str, TablePartition] = {}
         for pc in partitioned_tables:
             key = pc.get_nonqualified_table_name().lower()
             if key in self._partition_configs:
@@ -166,71 +192,82 @@ class PartitionChecker:
         return tables
 
     def _check_table_partition_in_specific_sql(
-            self, select_sql: exp.Expression, partition_config: PartitionColumn
+            self, select_sql: exp.Expression, partition_config: TablePartition
     ) -> PartitionViolation | None:
         """
         Check partition requirements for a specific table referenced in the FROM clause of the SQL query.
 
         Args:
             select_sql: Parsed SQL expression.
-            partition_config: PartitionColumn configuration for the table.
+            partition_config: TablePartition configuration for the table.
 
         Returns:
             PartitionViolation with violation details if validation fails, None if valid.
         """
-        column_name = partition_config.column_name
         table_name = partition_config.get_nonqualified_table_name()
+        enforced_partitions = partition_config.get_enforced_partitions()
 
         # Find all WHERE clauses in the query
         where_clauses = list(select_sql.find_all(exp.Where))
 
         if not where_clauses:
+            missing_columns = ", ".join(f"'{col}'" for col in enforced_partitions)
             return PartitionViolation(
                 violation=PartitionViolationType.MISSING_DAY_FILTER,
-                message=f"Table '{table_name}' is used without a WHERE clause containing a '{column_name}' filter",
+                message=f"Table '{table_name}' is used without a WHERE clause containing filters for {missing_columns}",
                 table_name=table_name,
             )
 
-        # Check if any WHERE clause has a partition column filter
-        partition_conditions = []
-        for where in where_clauses:
-            conditions = self._extract_partition_conditions(where, table_name, column_name)
-            partition_conditions.extend(conditions)
+        # Check each enforced partition column
+        for column_name in enforced_partitions:
+            # Check if any WHERE clause has this partition column filter
+            partition_conditions = []
+            for where in where_clauses:
+                conditions = self._extract_partition_conditions(where, table_name, column_name)
+                partition_conditions.extend(conditions)
 
-        if not partition_conditions:
-            return PartitionViolation(
-                violation=PartitionViolationType.MISSING_DAY_FILTER,
-                message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
-                table_name=table_name,
-            )
-
-        # Check if partition column is used without functions
-        for condition in partition_conditions:
-            if self._has_function_on_column(condition, column_name):
+            if not partition_conditions:
                 return PartitionViolation(
-                    violation=PartitionViolationType.DAY_FILTER_WITH_FUNCTION,
+                    violation=PartitionViolationType.MISSING_DAY_FILTER,
+                    message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
+                    table_name=table_name,
+                )
+
+            # Check if partition column is used without functions
+            for condition in partition_conditions:
+                if self._has_function_on_column(condition, column_name):
+                    return PartitionViolation(
+                        violation=PartitionViolationType.DAY_FILTER_WITH_FUNCTION,
+                        message=(
+                            f"Table '{table_name}' uses '{column_name}' column with a function, "
+                            "which disables partitioning. "
+                            f"Use raw '{column_name}' column in comparisons."
+                        ),
+                        table_name=table_name,
+                    )
+
+            # Check for finite range
+            if not self._has_finite_range(partition_conditions):
+                return PartitionViolation(
+                    violation=PartitionViolationType.NO_FINITE_RANGE,
                     message=(
-                        f"Table '{table_name}' uses '{column_name}' column with a function, "
-                        "which disables partitioning. "
-                        f"Use raw '{column_name}' column in comparisons."
+                        f"Table '{table_name}' does not have a finite date range on '{column_name}'. "
+                        "Use BETWEEN or combination of >= and <= operators."
                     ),
                     table_name=table_name,
                 )
 
-        # Check for finite range
-        if not self._has_finite_range(partition_conditions):
-            return PartitionViolation(
-                violation=PartitionViolationType.NO_FINITE_RANGE,
-                message=(
-                    f"Table '{table_name}' does not have a finite date range. "
-                    "Use BETWEEN or combination of >= and <= operators."
-                ),
-                table_name=table_name,
-            )
+        # Check date range if configured (only for DateTablePartition with first enforced column)
+        if (isinstance(partition_config, DateTablePartition)
+            and partition_config.max_date_range is not None
+            and enforced_partitions):
+            first_column = enforced_partitions[0]
+            partition_conditions = []
+            for where in where_clauses:
+                conditions = self._extract_partition_conditions(where, table_name, first_column)
+                partition_conditions.extend(conditions)
 
-        # Check date range if configured
-        if isinstance(partition_config, DatePartitionColumn) and partition_config.max_date_range_days is not None:
-            max_days = partition_config.max_date_range_days
+            max_days = partition_config.max_date_range.total_seconds() / 86400
             estimated_days = self._estimate_date_range(partition_conditions)
             if estimated_days is not None and estimated_days > max_days:
                 return PartitionViolation(
@@ -246,7 +283,7 @@ class PartitionChecker:
         return None
 
     def _check_table_partition_hierarchically(
-        self, select_sql: exp.Expression, table_name: str, partition_config: PartitionColumn
+        self, select_sql: exp.Expression, table_name: str, partition_config: TablePartition
     ) -> list[PartitionViolation]:
         """
         Check partition requirements for a specific table in the specific SQL query.
@@ -254,7 +291,7 @@ class PartitionChecker:
         Args:
             select_sql: Parsed SQL expression.
             table_name: Name of the table to check.
-            partition_config: PartitionColumn configuration for the table.
+            partition_config: TablePartition configuration for the table.
 
         Returns:
             List of PartitionViolation with violation details if validation fails, empty if valid.
@@ -513,14 +550,14 @@ class PartitionChecker:
 
 def check_partition_usage(
         sql: str,
-        partitioned_tables: list[PartitionColumn],
+        partitioned_tables: list[TablePartition],
 ) -> list[PartitionViolation]:
     """
     Convenience function to check SQL query for proper partition usage.
 
     Args:
         sql: The SQL query to validate.
-        partitioned_tables: List of PartitionColumn objects defining partition configuration.
+        partitioned_tables: List of TablePartition objects defining partition configuration.
 
     Returns:
         List of PartitionViolation objects for tables with violations.
@@ -528,10 +565,10 @@ def check_partition_usage(
         Returns a list with QUERY_INVALID_SYNTAX violation if query parsing fails.
 
     Example:
-        >>> from sqlranger import PartitionColumn
+        >>> from sqlranger import TablePartition
         >>> results = check_partition_usage(
         ...     "SELECT * FROM gridhive.fact.sales_history WHERE day = '2021-09-13'",
-        ...     [PartitionColumn("sales_history", "day")]
+        ...     [TablePartition("sales_history", ["day"])]
         ... )
         >>> len(results)  # Empty list means no violations
         0

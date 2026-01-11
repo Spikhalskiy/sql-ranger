@@ -36,9 +36,9 @@ pip install sqlranger==0.0.2
 To ensure explicit partition filtering on a `sales_history` table partitioned by the `day` column:
 
 ```python
-from sqlranger import check_partition_usage, PartitionColumn, PartitionViolationType
+from sqlranger import check_partition_usage, TablePartition, PartitionViolationType
 
-# Basic validation with PartitionColumn
+# Basic validation with TablePartition
 sql = """
     SELECT day, count(*) AS total
     FROM gridhive.fact.sales_history
@@ -46,7 +46,7 @@ sql = """
 """
 violations = check_partition_usage(
     sql,
-    partitioned_tables=[PartitionColumn("sales_history", "day")]
+    partitioned_tables=[TablePartition("sales_history", ["day"])]
 )
 
 if not violations:
@@ -56,26 +56,58 @@ else:
         print(f"✗ {violation.message}")
 ```
 
-#### Date Range Limits
+#### Hierarchical Partitions
 
-Use `DatePartitionColumn` to enforce different maximum date ranges for different tables:
+Use `TablePartition` with multiple columns to enforce hierarchical partitioning:
 
 ```python
-from sql_ranger import PartitionChecker, DatePartitionColumn
+from sqlranger import TablePartition, PartitionChecker
+
+# Configure hierarchical partitions: City > Warehouse > BuildingNumber
+partition_config = TablePartition(
+    "warehouse.inventory",
+    partitions=["City", "Warehouse", "BuildingNumber"],
+    enforced_level=2  # Only enforce City and Warehouse, BuildingNumber is optional
+)
+
+checker = PartitionChecker(partitioned_tables=[partition_config])
+
+# This query is valid - both City and Warehouse are filtered
+sql = """
+    SELECT * FROM warehouse.inventory
+    WHERE City = 'Seattle' AND Warehouse = 'W1' AND product_id = 100
+"""
+violations = checker.find_violations(sql)
+# violations will be empty
+
+# This query is invalid - missing Warehouse filter
+sql = """
+    SELECT * FROM warehouse.inventory
+    WHERE City = 'Seattle' AND product_id = 100
+"""
+violations = checker.find_violations(sql)
+# violations will contain an error about missing 'Warehouse' filter
+```
+
+#### Date Range Limits
+
+Use `DateTablePartition` to enforce different maximum date ranges for different tables:
+
+```python
+from datetime import timedelta
+from sqlranger import PartitionChecker, DateTablePartition, DatePartitionColumn
 
 # Configure different max date ranges per table
 partition_cols = [
-    DatePartitionColumn(
+    DateTablePartition(
         "gridhive.fact.sales_history",
-        "day",
-        "YYYY-mm-dd",
-        max_date_range_days=30
+        partitions=[DatePartitionColumn("day", "YYYY-MM-dd")],
+        max_date_range=timedelta(days=30)
     ),
-    DatePartitionColumn(
+    DateTablePartition(
         "events.log_table",
-        "event_time",
-        "YYYY-MM-dd",
-        max_date_range_days=7
+        partitions=[DatePartitionColumn("event_time", "YYYY-MM-dd")],
+        max_date_range=timedelta(days=7)
     ),
 ]
 
@@ -95,52 +127,126 @@ violations = checker.find_violations(sql)
 # violations will contain one entry for log_table only
 ```
 
+#### Hierarchical Date Partitions
+
+Configure hierarchical date partitions for tables partitioned by year, month, day, and hour:
+
+```python
+from datetime import timedelta
+from sqlranger import DateTablePartition, DatePartitionColumn
+
+# Hierarchical date partitions: year > month > day > hour
+partition_config = DateTablePartition(
+    "gridhive.fact.sales_history",
+    partitions=[
+        DatePartitionColumn("year", "YYYY"),
+        DatePartitionColumn("month", "MM"),
+        DatePartitionColumn("day", "dd"),
+        DatePartitionColumn("hour", "HH")
+    ],
+    enforced_level=4,  # All 4 levels must be specified
+    max_date_range=timedelta(days=1, hours=12)  # Max 1.5 days
+)
+
+# This query is valid - all 4 partition levels are filtered
+sql = """
+    SELECT * FROM gridhive.fact.sales_history
+    WHERE year = 2021 AND month = 9 AND day = 13 AND hour >= 10 AND hour <= 15
+"""
+```
+
 ### Configuration Classes
 
-#### PartitionColumn
+#### TablePartition
 
-`PartitionColumn` is the base class for defining partition configuration. It specifies:
+`TablePartition` is the base class for defining partition configuration. It specifies:
 - The full table name (including schema/catalog if applicable)
-- The partition column name
-
-#### DatePartitionColumn
-
-`DatePartitionColumn` extends `PartitionColumn` with additional date-specific configuration:
-- `date_pattern`: String describing the date format (e.g., "YYYY-mm-dd")
-- `max_date_range_days`: Optional maximum allowed date range for this specific table
+- An ordered list of partition column names (from root to smallest sub-partition)
+- Optional `enforced_level` parameter (int) specifying how many levels are enforced
 
 **Example:**
 ```python
-from sql_ranger import DatePartitionColumn
+from sqlranger import TablePartition
 
-# Configure a table with 30-day max range
-dpc = DatePartitionColumn(
-    "gridhive.fact.sales_history",
-    "day",
-    "YYYY-MM-dd",
-    max_date_range_days=30
+# Simple single-level partition
+tp = TablePartition("sales_history", ["day"])
+
+# Hierarchical partition with 3 levels, only 2 enforced
+tp = TablePartition(
+    "warehouse.inventory",
+    partitions=["City", "Warehouse", "BuildingNumber"],
+    enforced_level=2  # Only City and Warehouse are enforced
 )
+```
+
+#### DateTablePartition
+
+`DateTablePartition` extends `TablePartition` with additional date-specific configuration:
+- `partitions`: List of `DatePartitionColumn` objects (each with column name and format pattern)
+- `enforced_level`: Optional number of partition levels to enforce
+- `max_date_range`: Optional maximum allowed date range as timedelta object
+
+**Example:**
+```python
+from datetime import timedelta
+from sqlranger import DateTablePartition, DatePartitionColumn
+
+# Single date partition with max range
+dtp = DateTablePartition(
+    "gridhive.fact.sales_history",
+    partitions=[DatePartitionColumn("day", "YYYY-MM-dd")],
+    max_date_range=timedelta(days=30)
+)
+
+# Hierarchical date partition
+dtp = DateTablePartition(
+    "gridhive.fact.sales_history",
+    partitions=[
+        DatePartitionColumn("year", "YYYY"),
+        DatePartitionColumn("month", "MM"),
+        DatePartitionColumn("day", "dd")
+    ],
+    enforced_level=3,  # All 3 levels enforced
+    max_date_range=timedelta(days=90)
+)
+```
+
+#### DatePartitionColumn
+
+`DatePartitionColumn` is a dataclass that represents a single date partition column:
+- `column_name`: Name of the partition column
+- `format_pattern`: Date format pattern (e.g., "YYYY", "MM", "dd", "HH")
+
+**Example:**
+```python
+from sqlranger import DatePartitionColumn
+
+# Define individual date partition columns
+year_col = DatePartitionColumn("year", "YYYY")
+month_col = DatePartitionColumn("month", "MM")
+day_col = DatePartitionColumn("day", "dd")
 ```
 
 ### Validation Rules
 
 The partition checker enforces these rules:
 
-1. **Partition Filter Required**: Any query using a partitioned table must include a partition column filter in the WHERE clause (by default `day`, but configurable via `PartitionColumn`)
-2. **Raw Column Only**: The partition column must be used without functions (e.g., `day = '2021-09-13'` is OK, but `DATE_FORMAT(day, '%Y-%m')` breaks partitioning)
-3. **Finite Range**: Queries must define a finite date range using:
-    - `column = 'date'` (single date)
+1. **Partition Filter Required**: Any query using a partitioned table must include filters for all enforced partition columns in the WHERE clause
+2. **Raw Column Only**: Partition columns must be used without functions (e.g., `day = '2021-09-13'` is OK, but `DATE_FORMAT(day, '%Y-%m')` breaks partitioning)
+3. **Finite Range**: Queries must define a finite range for each partition column using:
+    - `column = 'value'` (single value)
     - `column BETWEEN 'start' AND 'end'`
     - Both `column >= 'start'` AND `column <= 'end'`
-4. **Optional Max Range**: When `max_date_range_days` is configured (via `DatePartitionColumn`), it enforces a maximum date range (best-effort estimation)
+4. **Optional Max Range**: When `max_date_range` is configured (via `DateTablePartition`), it enforces a maximum date range (best-effort estimation)
+5. **Hierarchical Enforcement**: All partition columns from the root to `enforced_level` must be filtered
 
 #### PartitionViolationType
 
 | Violation | Description |
 |--------|-------------|
-| `MISSING_DAY_FILTER` | Query doesn't have a partition column filter in the `WHERE` clause |
+| `MISSING_DAY_FILTER` | Query doesn't have a required partition column filter in the `WHERE` clause |
 | `DAY_FILTER_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
-| `NO_FINITE_RANGE` | Query doesn't define a finite date range |
+| `NO_FINITE_RANGE` | Query doesn't define a finite range for a partition column |
 | `EXCESSIVE_DATE_RANGE` | Date range exceeds the configured maximum |
 
 #### PartitionViolation
