@@ -251,7 +251,7 @@ class PartitionChecker:
                 return PartitionViolation(
                     violation=PartitionViolationType.NO_FINITE_RANGE,
                     message=(
-                        f"Table '{table_name}' does not have a finite date range on '{column_name}'. "
+                        f"Table '{table_name}' does not have a finite range on '{column_name}'. "
                         "Use BETWEEN or combination of >= and <= operators."
                     ),
                     table_name=table_name,

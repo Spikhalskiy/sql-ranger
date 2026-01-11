@@ -135,7 +135,7 @@ class TestPartitionChecker:
 
         assert len(results) == 1
         assert results[0].violation == PartitionViolationType.NO_FINITE_RANGE
-        assert "finite date range" in results[0].message
+        assert "finite range" in results[0].message
 
     def test_no_finite_range_only_less(self):
         """Test query with only <= filter (no lower bound)."""
