@@ -493,9 +493,7 @@ class PartitionChecker:
             if start_time and end_time:
                 # Calculate the difference
                 delta = end_time - start_time
-                return delta.total_seconds() if delta.total_seconds() > 0 else (
-                    # handle equality correctly
-                    self._get_finest_granularity(date_partitions, values_by_column))
+                return delta.total_seconds()
 
         except (ValueError, TypeError):
             # If we can't build valid datetimes, fall back to None
