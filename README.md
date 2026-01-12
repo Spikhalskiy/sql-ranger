@@ -283,7 +283,7 @@ The partition checker enforces these rules:
 - `violation`: Type of violation, see `PartitionViolationType` enum
 - `message`: Human-or-LLM-readable description of the violation
 - `table_name`: Name of the table with the violation
-- `estimated_days`: Estimated number of days in the date range for `EXCESSIVE_DATE_RANGE` violation type
+- `estimated_range`: Estimated excessive duration of time range for `EXCESSIVE_DATE_RANGE` violation type
 
 ### Return Values
 
