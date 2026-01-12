@@ -599,39 +599,68 @@ class PartitionChecker:
             # Parse the value based on the format pattern
             format_pattern = date_partition.format_pattern
             try:
-                # Handle full date strings first - be flexible with case
-                has_date_sep = ("-dd" in format_pattern or "-DD" in format_pattern)
-                if ("YYYY-MM" in format_pattern or "YYYY-mm" in format_pattern) and has_date_sep:
+                # Normalize pattern for robust matching
+                upper_pattern = format_pattern.upper()
+                lower_pattern = format_pattern.lower()
+
+                # Basic component presence flags
+                has_year = "YYYY" in upper_pattern or upper_pattern == "Y"
+                has_month = "MM" in upper_pattern or upper_pattern == "M"
+                has_day = "DD" in upper_pattern or lower_pattern == "dd" or upper_pattern == "D"
+                has_hour = "HH" in upper_pattern or upper_pattern == "H"
+                has_minute_token = "mm" in lower_pattern
+
+                # More specific composite patterns
+                has_full_date = (
+                    has_year
+                    and has_month
+                    and has_day
+                    and "-" in format_pattern
+                )
+                has_year_month = (
+                    has_year
+                    and has_month
+                    and not has_full_date
+                    and "-" in format_pattern
+                )
+
+                if has_full_date:
                     # Full date string like "2021-09-13"
                     parts = value.split("-")
                     if len(parts) == 3:
                         year = int(parts[0])
                         month = int(parts[1])
                         day = int(parts[2])
-                elif "YYYY-MM" in format_pattern or "YYYY-mm" in format_pattern:
+                elif has_year_month:
                     # Year-month string like "2021-09"
                     parts = value.split("-")
                     if len(parts) == 2:
                         year = int(parts[0])
                         month = int(parts[1])
-                elif "YYYY" in format_pattern.upper() or format_pattern.upper() == "Y":
+                elif has_year:
                     year = int(value)
-                elif "MM" in format_pattern.upper() or format_pattern.upper() == "M":
+                elif has_month:
                     month = int(value)
-                elif "DD" in format_pattern.upper() or format_pattern.lower() == "dd" or format_pattern.upper() == "D":
+                elif has_day:
                     day = int(value)
-                elif "HH" in format_pattern.upper() or format_pattern.upper() == "H":
+                elif has_hour:
                     hour = int(value)
-                elif "mm" in format_pattern and "HH" not in format_pattern and "YYYY" not in format_pattern:
-                    # minute (lowercase mm when not part of YYYY-MM)
+                elif has_minute_token and not has_hour and not has_year:
+                    # minute (lowercase mm when not part of a year or hour pattern)
                     minute = int(value)
-                elif "SS" in format_pattern.upper() or format_pattern.upper() == "S":
+                elif "SS" in upper_pattern or upper_pattern == "S":
                     second = int(value)
             except (ValueError, IndexError):
                 continue
 
         try:
-            return datetime(year, month, day, hour, minute, second)
+            dt = datetime(year, month, day, hour, minute, second)
+            # When building the maximum datetime, adjust to the end of the finest-granularity period.
+            if not use_min:
+                granularity_seconds = self._get_finest_granularity(date_partitions, values_by_column)
+                # Move to the end of the period: start + granularity - 1 second.
+                dt = dt + timedelta(seconds=granularity_seconds) - timedelta(seconds=1)
+            return dt
         except ValueError:
             return None
 
