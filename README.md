@@ -272,7 +272,7 @@ The partition checker enforces these rules:
 
 | Violation | Description |
 |--------|-------------|
-| `MISSING_DAY_FILTER` | Query doesn't have a required partition column filter in the `WHERE` clause |
+| `MISSING_PARTITION_FILTER` | Query doesn't have a required partition column filter in the `WHERE` clause |
 | `PARTITION_COLUMN_WITH_FUNCTION` | Partition column is wrapped in a function (breaks partitioning) |
 | `NO_FINITE_RANGE` | Query doesn't define a finite range for a partition column |
 | `EXCESSIVE_DATE_RANGE` | Date range exceeds the configured maximum |
