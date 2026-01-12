@@ -563,6 +563,31 @@ class PartitionChecker:
         min_val: str | None = None
         max_val: str | None = None
 
+        def compare_values(val1: str, val2: str, operator: str) -> bool:
+            """
+            Compare two values, attempting numeric comparison first, falling back to string.
+
+            Args:
+                val1: First value to compare
+                val2: Second value to compare
+                operator: Comparison operator ("<" or ">")
+
+            Returns:
+                True if val1 operator val2, False otherwise
+            """
+            try:
+                # Try to convert to float for numeric comparison
+                num1 = float(val1)
+                num2 = float(val2)
+                if operator == "<":
+                    return num1 < num2
+                return num1 > num2
+            except (ValueError, TypeError):
+                # Fall back to string comparison
+                if operator == "<":
+                    return val1 < val2
+                return val1 > val2
+
         for condition in conditions:
             if isinstance(condition, exp.Between):
                 # Extract from BETWEEN clause
@@ -579,11 +604,11 @@ class PartitionChecker:
                     min_val = max_val = val
             elif isinstance(condition, (exp.GTE, exp.GT)):
                 val = self._extract_literal_from_comparison(condition)
-                if val is not None and (min_val is None or val < min_val):
+                if val is not None and (min_val is None or compare_values(val, min_val, "<")):
                     min_val = val
             elif isinstance(condition, (exp.LTE, exp.LT)):
                 val = self._extract_literal_from_comparison(condition)
-                if val is not None and (max_val is None or val > max_val):
+                if val is not None and (max_val is None or compare_values(val, max_val, ">")):
                     max_val = val
 
         return min_val, max_val
