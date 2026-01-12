@@ -5,26 +5,54 @@ This module provides functionality to verify that SQL queries accessing partitio
 include proper partition filters (day column) to ensure efficient query execution.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 import sqlglot
 from sqlglot import exp
 
 
-class PartitionColumn:
-    """Configuration for a partitioned table column."""
+@dataclass
+class DatePartitionColumn:
+    """Configuration for a single date partition column with its format pattern."""
 
-    def __init__(self, table_name: str, column_name: str):
+    column_name: str
+    format_pattern: str
+
+
+class TablePartition:
+    """Configuration for a partitioned table with hierarchical partition columns."""
+
+    def __init__(
+        self,
+        table_name: str,
+        partitions: list[str],
+        enforced_level: int | None = None,
+    ):
         """
-        Initialize the PartitionColumn.
+        Initialize the TablePartition.
 
         Args:
             table_name: Full table name (e.g., 'gridhive.fact.sales_history').
-            column_name: Name of the partition column (e.g., 'day').
+            partitions: Ordered list of partition column names from root to smallest sub-partition.
+            enforced_level: Number of partition levels to enforce. If None, all partitions are enforced.
+
+        Raises:
+            ValueError: If partitions list is empty, enforced_level is negative,
+                       or enforced_level exceeds the number of partitions.
         """
+        if not partitions:
+            raise ValueError("partitions list cannot be empty")
+        if enforced_level is not None and enforced_level < 0:
+            raise ValueError(f"enforced_level must be non-negative, got {enforced_level}")
+        if enforced_level is not None and enforced_level > len(partitions):
+            raise ValueError(
+                f"enforced_level ({enforced_level}) cannot exceed number of partitions ({len(partitions)})"
+            )
+
         self.table_name = table_name
-        self.column_name = column_name
+        self.partitions = partitions
+        self.enforced_level = enforced_level if enforced_level is not None else len(partitions)
 
     def get_nonqualified_table_name(self) -> str:
         """
@@ -34,42 +62,64 @@ class PartitionColumn:
             Short table name without schema/catalog prefix.
 
         Example:
-            >>> pc = PartitionColumn('gridhive.fact.sales_history', 'day')
-            >>> pc.get_nonqualified_table_name()
+            >>> tp = TablePartition('gridhive.fact.sales_history', ['day'])
+            >>> tp.get_nonqualified_table_name()
             'sales_history'
         """
         return self.table_name.split(".")[-1]
 
+    def get_enforced_partitions(self) -> list[str]:
+        """
+        Get the list of enforced partition columns.
 
-class DatePartitionColumn(PartitionColumn):
-    """Configuration for a date-partitioned table column."""
+        Returns:
+            List of partition column names that must be filtered.
+        """
+        return self.partitions[:self.enforced_level]
+
+
+class DateTablePartition(TablePartition):
+    """Configuration for a date-partitioned table with hierarchical date partition columns."""
 
     def __init__(
         self,
         table_name: str,
-        column_name: str,
-        date_pattern: str,
-        max_date_range_days: int | None = None,
+        partitions: list[DatePartitionColumn],
+        enforced_level: int | None = None,
+        max_date_range: timedelta | None = None,
     ):
         """
-        Initialize the DatePartitionColumn.
+        Initialize the DateTablePartition.
 
         Args:
             table_name: Full table name (e.g., 'gridhive.fact.sales_history').
-            column_name: Name of the partition column (e.g., 'day').
-            date_pattern: Date format pattern (e.g., 'YYYY-MM-dd').
-            max_date_range_days: Maximum allowed date range in days. If None, range is not checked.
+            partitions: Ordered list of DatePartitionColumn objects from root to smallest sub-partition.
+            enforced_level: Number of partition levels to enforce. If None, all partitions are enforced.
+            max_date_range: Maximum allowed date range as timedelta. If None, range is not checked.
+
+        Raises:
+            ValueError: If partitions list is empty, contains non-DatePartitionColumn items,
+                       or max_date_range is not positive.
         """
-        super().__init__(table_name, column_name)
-        self.date_pattern = date_pattern
-        self.max_date_range_days = max_date_range_days
+        if not partitions:
+            raise ValueError("partitions list cannot be empty")
+        if not all(isinstance(p, DatePartitionColumn) for p in partitions):
+            raise ValueError("All items in partitions list must be DatePartitionColumn instances")
+        if max_date_range is not None and max_date_range.total_seconds() <= 0:
+            raise ValueError(f"max_date_range must be positive, got {max_date_range}")
+
+        # Extract column names for parent class
+        column_names = [p.column_name for p in partitions]
+        super().__init__(table_name, column_names, enforced_level)
+        self.date_partitions = partitions
+        self.max_date_range = max_date_range
 
 
 class PartitionViolationType(Enum):
     """Type of partition check violation."""
 
-    MISSING_DAY_FILTER = "MISSING_DAY_FILTER"
-    DAY_FILTER_WITH_FUNCTION = "DAY_FILTER_WITH_FUNCTION"
+    MISSING_PARTITION_FILTER = "MISSING_PARTITION_FILTER"
+    PARTITION_COLUMN_WITH_FUNCTION = "PARTITION_COLUMN_WITH_FUNCTION"
     NO_FINITE_RANGE = "NO_FINITE_RANGE"
     EXCESSIVE_DATE_RANGE = "EXCESSIVE_DATE_RANGE"
     QUERY_INVALID_SYNTAX = "QUERY_INVALID_SYNTAX"
@@ -82,18 +132,18 @@ class PartitionViolation:
     violation: PartitionViolationType
     message: str
     table_name: str | None = None
-    estimated_days: int | None = None
+    estimated_range: timedelta | None = None
 
 
 class PartitionChecker:
     """Validates SQL queries for proper partition usage on specified tables."""
 
-    def __init__(self, partitioned_tables: list[PartitionColumn]):
+    def __init__(self, partitioned_tables: list[TablePartition]):
         """
         Initialize the PartitionChecker.
 
         Args:
-            partitioned_tables: List of PartitionColumn objects defining partition configuration.
+            partitioned_tables: List of TablePartition objects defining partition configuration.
 
         Raises:
             ValueError: If multiple tables with the same non-qualified name are configured.
@@ -101,7 +151,7 @@ class PartitionChecker:
         # Build configuration mapping keyed by non-qualified table name, while
         # validating that there are no duplicate short names which would cause
         # configurations to be silently overwritten.
-        self._partition_configs: dict[str, PartitionColumn] = {}
+        self._partition_configs: dict[str, TablePartition] = {}
         for pc in partitioned_tables:
             key = pc.get_nonqualified_table_name().lower()
             if key in self._partition_configs:
@@ -134,7 +184,7 @@ class PartitionChecker:
                     violation=PartitionViolationType.QUERY_INVALID_SYNTAX,
                     message=f"Failed to parse SQL query: {e!s}",
                     table_name=None,
-                    estimated_days=None,
+                    estimated_range=None,
                 )
             ]
 
@@ -166,87 +216,108 @@ class PartitionChecker:
         return tables
 
     def _check_table_partition_in_specific_sql(
-            self, select_sql: exp.Expression, partition_config: PartitionColumn
+            self, select_sql: exp.Expression, partition_config: TablePartition
     ) -> PartitionViolation | None:
         """
         Check partition requirements for a specific table referenced in the FROM clause of the SQL query.
 
         Args:
             select_sql: Parsed SQL expression.
-            partition_config: PartitionColumn configuration for the table.
+            partition_config: TablePartition configuration for the table.
 
         Returns:
             PartitionViolation with violation details if validation fails, None if valid.
         """
-        column_name = partition_config.column_name
         table_name = partition_config.get_nonqualified_table_name()
+        enforced_partitions = partition_config.get_enforced_partitions()
 
         # Find all WHERE clauses in the query
         where_clauses = list(select_sql.find_all(exp.Where))
 
         if not where_clauses:
+            missing_columns = ", ".join(f"'{col}'" for col in enforced_partitions)
             return PartitionViolation(
-                violation=PartitionViolationType.MISSING_DAY_FILTER,
-                message=f"Table '{table_name}' is used without a WHERE clause containing a '{column_name}' filter",
+                violation=PartitionViolationType.MISSING_PARTITION_FILTER,
+                message=f"Table '{table_name}' is used without a WHERE clause containing filters for {missing_columns}",
                 table_name=table_name,
             )
 
-        # Check if any WHERE clause has a partition column filter
-        partition_conditions = []
-        for where in where_clauses:
-            conditions = self._extract_partition_conditions(where, table_name, column_name)
-            partition_conditions.extend(conditions)
+        # Check each enforced partition column
+        for column_name in enforced_partitions:
+            # Check if any WHERE clause has this partition column filter
+            partition_conditions = []
+            for where in where_clauses:
+                conditions = self._extract_partition_conditions(where, table_name, column_name)
+                partition_conditions.extend(conditions)
 
-        if not partition_conditions:
-            return PartitionViolation(
-                violation=PartitionViolationType.MISSING_DAY_FILTER,
-                message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
-                table_name=table_name,
-            )
-
-        # Check if partition column is used without functions
-        for condition in partition_conditions:
-            if self._has_function_on_column(condition, column_name):
+            if not partition_conditions:
                 return PartitionViolation(
-                    violation=PartitionViolationType.DAY_FILTER_WITH_FUNCTION,
+                    violation=PartitionViolationType.MISSING_PARTITION_FILTER,
+                    message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
+                    table_name=table_name,
+                )
+
+            # Check if partition column is used without functions
+            for condition in partition_conditions:
+                if self._has_function_on_column(condition, column_name):
+                    return PartitionViolation(
+                        violation=PartitionViolationType.PARTITION_COLUMN_WITH_FUNCTION,
+                        message=(
+                            f"Table '{table_name}' uses '{column_name}' column with a function, "
+                            "which disables partitioning. "
+                            f"Use raw '{column_name}' column in comparisons."
+                        ),
+                        table_name=table_name,
+                    )
+
+            # Check for finite range
+            if not self._has_finite_range(partition_conditions):
+                return PartitionViolation(
+                    violation=PartitionViolationType.NO_FINITE_RANGE,
                     message=(
-                        f"Table '{table_name}' uses '{column_name}' column with a function, "
-                        "which disables partitioning. "
-                        f"Use raw '{column_name}' column in comparisons."
+                        f"Table '{table_name}' does not have a finite range on '{column_name}'. "
+                        "Use BETWEEN or combination of >= and <= operators."
                     ),
                     table_name=table_name,
                 )
 
-        # Check for finite range
-        if not self._has_finite_range(partition_conditions):
-            return PartitionViolation(
-                violation=PartitionViolationType.NO_FINITE_RANGE,
-                message=(
-                    f"Table '{table_name}' does not have a finite date range. "
-                    "Use BETWEEN or combination of >= and <= operators."
-                ),
-                table_name=table_name,
+        # Check date range if configured (only for DateTablePartition)
+        if (isinstance(partition_config, DateTablePartition)
+            and partition_config.max_date_range is not None
+            and enforced_partitions):
+            # Collect conditions for each enforced partition column
+            conditions_by_column = {}
+            for column_name in enforced_partitions:
+                column_conditions = []
+                for where in where_clauses:
+                    conditions = self._extract_partition_conditions(where, table_name, column_name)
+                    column_conditions.extend(conditions)
+                conditions_by_column[column_name] = column_conditions
+
+            # Estimate the time range from all partition levels combined
+            estimated_seconds = self._estimate_hierarchical_time_range(
+                conditions_by_column, partition_config.date_partitions
             )
 
-        # Check date range if configured
-        if isinstance(partition_config, DatePartitionColumn) and partition_config.max_date_range_days is not None:
-            max_days = partition_config.max_date_range_days
-            estimated_days = self._estimate_date_range(partition_conditions)
-            if estimated_days is not None and estimated_days > max_days:
+            max_seconds = partition_config.max_date_range.total_seconds()
+            if estimated_seconds is not None and estimated_seconds > max_seconds:
+                estimated_range = timedelta(seconds=estimated_seconds)
+                estimated_str = self._format_time_range(estimated_seconds)
+                max_str = self._format_time_range(max_seconds)
                 return PartitionViolation(
                     violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
                     message=(
                         f"Table '{table_name}' has an excessive date range of approximately "
-                        f"{estimated_days} days (max: {max_days})"
+                        f"{estimated_str} (max: {max_str})"
                     ),
                     table_name=table_name,
-                    estimated_days=estimated_days,
+                    estimated_range=estimated_range,
                 )
 
         return None
 
     def _check_table_partition_hierarchically(
-        self, select_sql: exp.Expression, table_name: str, partition_config: PartitionColumn
+        self, select_sql: exp.Expression, table_name: str, partition_config: TablePartition
     ) -> list[PartitionViolation]:
         """
         Check partition requirements for a specific table in the specific SQL query.
@@ -254,7 +325,7 @@ class PartitionChecker:
         Args:
             select_sql: Parsed SQL expression.
             table_name: Name of the table to check.
-            partition_config: PartitionColumn configuration for the table.
+            partition_config: TablePartition configuration for the table.
 
         Returns:
             List of PartitionViolation with violation details if validation fails, empty if valid.
@@ -400,19 +471,317 @@ class PartitionChecker:
 
         return has_between or has_equals or (has_lower_bound and has_upper_bound)
 
-    def _estimate_date_range(self, conditions: list[exp.Expression]) -> int | None:
+    def _format_time_range(self, seconds: float) -> str:
         """
-        Estimate the date range in days from conditions.
+        Format a time range in seconds to a human-readable string.
+
+        Selects the most appropriate unit (seconds, minutes, hours, days) based on magnitude.
+
+        Args:
+            seconds: Time range in seconds
+
+        Returns:
+            Formatted string like "2 hours" or "1.5 days"
+        """
+        if seconds < 60:
+            # Less than 1 minute - show in seconds
+            return f"{seconds:.1f} seconds" if seconds != 1 else "1 second"
+        if seconds < 3600:
+            # Less than 1 hour - show in minutes
+            minutes = seconds / 60
+            return f"{minutes:.1f} minutes" if minutes != 1 else "1 minute"
+        if seconds < 86400:
+            # Less than 1 day - show in hours
+            hours = seconds / 3600
+            return f"{hours:.1f} hours" if hours != 1 else "1 hour"
+        # 1 day or more - show in days
+        days = seconds / 86400
+        return f"{days:.1f} days" if days != 1 else "1 day"
+
+    def _estimate_hierarchical_time_range(
+        self,
+        conditions_by_column: dict[str, list[exp.Expression]],
+        date_partitions: list,
+    ) -> float | None:
+        """
+        Estimate time range from hierarchical date partition conditions.
+
+        This function handles all levels of date/time partitions uniformly by:
+        1. Extracting min/max values from all partition levels
+        2. Building start and end times from the combined values
+        3. Calculating the time difference in seconds
+
+        Args:
+            conditions_by_column: Dictionary mapping column names to their conditions
+            date_partitions: List of DatePartitionColumn objects with format info
+
+        Returns:
+            Estimated range in seconds, or None if cannot be estimated
+        """
+        # Extract value ranges for each partition level
+        values_by_column = {}
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            conditions = conditions_by_column.get(column_name, [])
+            if not conditions:
+                continue
+
+            min_val, max_val = self._extract_value_range(conditions)
+            values_by_column[column_name] = (min_val, max_val)
+
+        if not values_by_column:
+            return None
+
+        # Build datetime objects from the extracted values
+        # We need to determine start and end times from all partition levels
+        try:
+            start_time = self._build_datetime_from_partitions(
+                values_by_column, date_partitions, use_min=True
+            )
+            end_time = self._build_datetime_from_partitions(
+                values_by_column, date_partitions, use_min=False
+            )
+
+            if start_time and end_time:
+                # Calculate the difference
+                delta = end_time - start_time
+                return delta.total_seconds()
+
+        except (ValueError, TypeError):
+            # If we can't build valid datetimes, fall back to None
+            pass
+
+        return None
+
+    def _extract_value_range(self, conditions: list[exp.Expression]) -> tuple[str | None, str | None]:
+        """
+        Extract the min and max values from a list of conditions.
+
+        Returns:
+            Tuple of (min_value, max_value) as strings, or (None, None)
+        """
+        min_val: str | None = None
+        max_val: str | None = None
+
+        def compare_values(val1: str, val2: str, operator: str) -> bool:
+            """
+            Compare two values, attempting numeric comparison first, falling back to string.
+
+            Args:
+                val1: First value to compare
+                val2: Second value to compare
+                operator: Comparison operator ("<" or ">")
+
+            Returns:
+                True if val1 operator val2, False otherwise
+            """
+            try:
+                # Try to convert to float for numeric comparison
+                num1 = float(val1)
+                num2 = float(val2)
+                if operator == "<":
+                    return num1 < num2
+                return num1 > num2
+            except (ValueError, TypeError):
+                # Fall back to string comparison
+                if operator == "<":
+                    return val1 < val2
+                return val1 > val2
+
+        for condition in conditions:
+            if isinstance(condition, exp.Between):
+                # Extract from BETWEEN clause
+                low = self._extract_literal_value(condition.args.get("low"))
+                high = self._extract_literal_value(condition.args.get("high"))
+                if low is not None and high is not None:
+                    min_val = low
+                    max_val = high
+                    break
+            elif isinstance(condition, exp.EQ):
+                # Single value - min and max are the same
+                val = self._extract_literal_from_comparison(condition)
+                if val is not None:
+                    min_val = max_val = val
+            elif isinstance(condition, (exp.GTE, exp.GT)):
+                val = self._extract_literal_from_comparison(condition)
+                if val is not None and (min_val is None or compare_values(val, min_val, "<")):
+                    min_val = val
+            elif isinstance(condition, (exp.LTE, exp.LT)):
+                val = self._extract_literal_from_comparison(condition)
+                if val is not None and (max_val is None or compare_values(val, max_val, ">")):
+                    max_val = val
+
+        return min_val, max_val
+
+    def _extract_literal_value(self, expr: exp.Expression | None) -> str | None:
+        """Extract a literal value as a string from an expression."""
+        if expr is None:
+            return None
+
+        if isinstance(expr, exp.Literal):
+            return str(expr.this)
+
+        return None
+
+    def _extract_literal_from_comparison(self, condition: exp.Expression) -> str | None:
+        """Extract a literal value from a comparison expression."""
+        # Check which side has a column reference
+        has_column_left = any(isinstance(n, exp.Column) for n in condition.this.walk())
+        has_column_right = any(isinstance(n, exp.Column) for n in condition.expression.walk())
+
+        if has_column_left and not has_column_right:
+            return self._extract_literal_value(condition.expression)
+        if has_column_right and not has_column_left:
+            return self._extract_literal_value(condition.this)
+
+        return None
+
+    def _build_datetime_from_partitions(
+        self,
+        values_by_column: dict[str, tuple[str | None, str | None]],
+        date_partitions: list,
+        use_min: bool,
+    ) -> datetime | None:
+        """
+        Build a datetime object from partition values.
+
+        Args:
+            values_by_column: Dictionary of column names to (min, max) value tuples
+            date_partitions: List of DatePartitionColumn objects
+            use_min: If True, use min values; if False, use max values
+
+        Returns:
+            datetime object or None
+        """
+        # Default values for datetime components
+        year = 1970
+        month = 1
+        day = 1
+        hour = 0
+        minute = 0
+        second = 0
+
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            if column_name not in values_by_column:
+                continue
+
+            min_val, max_val = values_by_column[column_name]
+            value = min_val if use_min else max_val
+            if value is None:
+                continue
+
+            # Parse the value based on the format pattern
+            format_pattern = date_partition.format_pattern
+            try:
+                upper_pattern = format_pattern.upper()
+
+                # Basic component presence flags
+                has_year = "YYYY" in upper_pattern or upper_pattern == "Y"
+                has_month = "mm" in format_pattern or format_pattern == "m"
+                has_day = "DD" in upper_pattern or upper_pattern == "D"
+                has_hour = "HH" in upper_pattern or upper_pattern == "H"
+                has_minute_token = "MM" in format_pattern or format_pattern == "M"
+                has_seconds_token = "SS" in upper_pattern or upper_pattern == "S"
+                # More specific composite patterns
+                has_full_date = (
+                    has_year
+                    and has_month
+                    and has_day
+                    and "-" in format_pattern
+                )
+                has_year_month = (
+                    has_year
+                    and has_month
+                    and not has_full_date
+                    and "-" in format_pattern
+                )
+
+                if has_full_date:
+                    # Full date string like "2021-09-13"
+                    parts = value.split("-")
+                    if len(parts) == 3:
+                        year = int(parts[0])
+                        month = int(parts[1])
+                        day = int(parts[2])
+                elif has_year_month:
+                    # Year-month string like "2021-09"
+                    parts = value.split("-")
+                    if len(parts) == 2:
+                        year = int(parts[0])
+                        month = int(parts[1])
+                elif has_year:
+                    year = int(value)
+                elif has_month:
+                    month = int(value)
+                elif has_day:
+                    day = int(value)
+                elif has_hour:
+                    hour = int(value)
+                elif has_minute_token:
+                    minute = int(value)
+                elif has_seconds_token:
+                    second = int(value)
+            except (ValueError, IndexError):
+                continue
+
+        try:
+            dt = datetime(year, month, day, hour, minute, second)
+            # When building the maximum datetime, adjust to the end of the finest-granularity period.
+            if not use_min:
+                granularity_seconds = self._get_finest_granularity(date_partitions, values_by_column)
+                # Move to the end of the period: start + granularity - 1 second.
+                dt = dt + timedelta(seconds=granularity_seconds) - timedelta(seconds=1)
+            return dt
+        except ValueError:
+            return None
+
+    def _get_finest_granularity(
+        self,
+        date_partitions: list,
+        values_by_column: dict[str, tuple[str | None, str | None]],
+    ) -> float:
+        """
+        Get the finest granularity in seconds for the finest partition level that has conditions.
+        This handles when the query has a == check to estimate the length of the targeted time range.
+
+        Returns:
+            Granularity in seconds (e.g., 3600 for hour, 86400 for day)
+        """
+        # Check from finest to coarsest
+        for date_partition in reversed(date_partitions):
+            if date_partition.column_name in values_by_column:
+                format_pattern = date_partition.format_pattern
+                format_upper = format_pattern.upper()
+
+                if "SS" in format_upper or format_upper == "S":
+                    return 1.0  # second
+                if "MM" in format_pattern or format_pattern == "M":
+                    return 60.0  # minute
+                if "HH" in format_upper or format_upper == "H":
+                    return 3600.0  # hour
+                if "DD" in format_upper or format_upper == "D":
+                    return 86400.0  # day
+                if "mm" in format_pattern or format_pattern == "m":
+                    return 86400.0 * 30  # month (approximate)
+                if "YYYY" in format_upper or format_upper == "Y":
+                    return 86400.0 * 365  # year (approximate)
+
+        return 86400.0  # default to day
+
+    def _estimate_date_range(self, conditions: list[exp.Expression]) -> float | None:
+        """
+        Estimate the date range in seconds from conditions.
 
         This is a best-effort estimation that only works with:
-        - String date literals in YYYY-MM-DD format
+        - String date literals in YYYY-mm-dd format
         - Simple date function calls (date, from_iso8601_date)
 
         Args:
             conditions: List of day column conditions.
 
         Returns:
-            Estimated number of days, or None if cannot be estimated.
+            Estimated number of seconds, or None if cannot be estimated.
         """
         start_date: datetime | None = None
         end_date: datetime | None = None
@@ -427,10 +796,10 @@ class PartitionChecker:
                     end_date = high
                     break
             elif isinstance(condition, exp.EQ):
-                # Single date
+                # Single date - assume 1 day in seconds
                 date_val = self._extract_date_from_comparison(condition)
                 if date_val:
-                    return 1
+                    return 86400.0  # 1 day in seconds
             elif isinstance(condition, (exp.GTE, exp.GT)):
                 date_val = self._extract_date_from_comparison(condition)
                 if date_val and (start_date is None or date_val < start_date):
@@ -441,7 +810,7 @@ class PartitionChecker:
                     end_date = date_val
 
         if start_date and end_date:
-            return (end_date - start_date).days + 1
+            return (end_date - start_date).total_seconds() + 86400.0  # +1 day for inclusive range
 
         return None
 
@@ -497,7 +866,7 @@ class PartitionChecker:
 
     def _parse_date_string(self, date_str: str) -> datetime | None:
         """
-        Parse a date string in YYYY-MM-DD format.
+        Parse a date string in YYYY-mm-dd format.
 
         Args:
             date_str: Date string to parse.
@@ -513,14 +882,14 @@ class PartitionChecker:
 
 def check_partition_usage(
         sql: str,
-        partitioned_tables: list[PartitionColumn],
+        partitioned_tables: list[TablePartition],
 ) -> list[PartitionViolation]:
     """
     Convenience function to check SQL query for proper partition usage.
 
     Args:
         sql: The SQL query to validate.
-        partitioned_tables: List of PartitionColumn objects defining partition configuration.
+        partitioned_tables: List of TablePartition objects defining partition configuration.
 
     Returns:
         List of PartitionViolation objects for tables with violations.
@@ -528,10 +897,10 @@ def check_partition_usage(
         Returns a list with QUERY_INVALID_SYNTAX violation if query parsing fails.
 
     Example:
-        >>> from sqlranger import PartitionColumn
+        >>> from sqlranger import TablePartition
         >>> results = check_partition_usage(
         ...     "SELECT * FROM gridhive.fact.sales_history WHERE day = '2021-09-13'",
-        ...     [PartitionColumn("sales_history", "day")]
+        ...     [TablePartition("sales_history", ["day"])]
         ... )
         >>> len(results)  # Empty list means no violations
         0

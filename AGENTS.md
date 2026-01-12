@@ -23,7 +23,7 @@ sql-ranger/
 
 **Key Components:**
 - **PartitionChecker**: Main class that validates SQL queries against partitioning requirements
-- **PartitionViolationType**: Enum defining validation result statuses (VALID, MISSING_DAY_FILTER, DAY_FILTER_WITH_FUNCTION, NO_FINITE_RANGE, EXCESSIVE_DATE_RANGE)
+- **PartitionViolationType**: Enum defining validation result statuses (VALID, MISSING_DAY_FILTER, PARTITION_COLUMN_WITH_FUNCTION, NO_FINITE_RANGE, EXCESSIVE_DATE_RANGE)
 - **PartitionViolation**: Dataclass containing validation results
 - **check_partition_usage()**: Convenience function for simple validation
 
@@ -31,7 +31,7 @@ sql-ranger/
 - Python ≥ 3.10
 - sqlglot ≥ 28.0.0 (SQL parsing)
 - pytest, pytest-cov, pytest-asyncio (testing)
-- ruff 0.14.10 (linting)
+- ruff (linting)
 
 ## Make Commands
 
@@ -172,6 +172,7 @@ def function_name(param1: str, param2: int) -> bool:
 - Tests in `tests/test_checker.py`
 - Public API exports in `src/sqlranger/__init__.py`
 - Documentation in README.md
+- CHANGELOG.md should get entries describing significant changes
 - Build configuration in pyproject.toml
 
 ### What NOT to Modify
