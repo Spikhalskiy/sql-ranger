@@ -307,7 +307,7 @@ class TestDateRangeEstimation:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
                 max_date_range=timedelta(days=100),
             )
         ])
@@ -467,7 +467,7 @@ class TestDateRangeEstimation:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
                 max_date_range=timedelta(days=30),
             )
         ])
@@ -578,7 +578,7 @@ class TestPartitionCheckerWithTablePartition:
         partition_cols = [
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
                 max_date_range=timedelta(days=100),
             )
         ]
@@ -601,7 +601,7 @@ class TestPartitionCheckerWithTablePartition:
         partition_cols = [
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-MM-dd")],
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
                 max_date_range=timedelta(days=10),
             ),
             DateTablePartition(
@@ -683,7 +683,7 @@ class TestConvenienceFunction:
             partitioned_tables=[
                 DateTablePartition(
                 "inventory_log",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
                 max_date_range=timedelta(days=100),
             )
             ]

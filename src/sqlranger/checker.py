@@ -621,17 +621,15 @@ class PartitionChecker:
             # Parse the value based on the format pattern
             format_pattern = date_partition.format_pattern
             try:
-                # Normalize pattern for robust matching
                 upper_pattern = format_pattern.upper()
-                lower_pattern = format_pattern.lower()
 
                 # Basic component presence flags
                 has_year = "YYYY" in upper_pattern or upper_pattern == "Y"
-                has_month = "MM" in upper_pattern or upper_pattern == "M"
-                has_day = "DD" in upper_pattern or lower_pattern == "dd" or upper_pattern == "D"
+                has_month = "MM" in format_pattern or format_pattern == "M"
+                has_day = "DD" in upper_pattern or upper_pattern == "D"
                 has_hour = "HH" in upper_pattern or upper_pattern == "H"
-                has_minute_token = "mm" in lower_pattern
-
+                has_minute_token = "mm" in format_pattern or format_pattern == "m"
+                has_seconds_token = "SS" in upper_pattern or upper_pattern == "S"
                 # More specific composite patterns
                 has_full_date = (
                     has_year
@@ -670,7 +668,7 @@ class PartitionChecker:
                 elif has_minute_token and not has_hour and not has_year:
                     # minute (lowercase mm when not part of a year or hour pattern)
                     minute = int(value)
-                elif "SS" in upper_pattern or upper_pattern == "S":
+                elif has_seconds_token:
                     second = int(value)
             except (ValueError, IndexError):
                 continue
@@ -706,16 +704,13 @@ class PartitionChecker:
 
                 if "SS" in format_upper or format_upper == "S":
                     return 1.0  # second
-                if "mm" in format_pattern and "HH" not in format_upper:
+                if "mm" in format_pattern or format_pattern == "m":
                     return 60.0  # minute
                 if "HH" in format_upper or format_upper == "H":
                     return 3600.0  # hour
-                if "DD" in format_upper or "dd" in format_pattern or format_upper == "D":
+                if "DD" in format_upper or format_upper == "D":
                     return 86400.0  # day
-                if "-DD" in format_upper or "-dd" in format_pattern:
-                    # Part of a full date string
-                    return 86400.0  # day
-                if "MM" in format_upper or format_upper == "M":
+                if "MM" in format_pattern or format_pattern == "M":
                     return 86400.0 * 30  # month (approximate)
                 if "YYYY" in format_upper or format_upper == "Y":
                     return 86400.0 * 365  # year (approximate)

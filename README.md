@@ -194,7 +194,7 @@ from sqlranger import DateTablePartition, DatePartitionColumn
 # Single date partition with max range
 dtp = DateTablePartition(
     "gridhive.fact.sales_history",
-    partitions=[DatePartitionColumn("day", "YYYY-MM-dd")],
+    partitions=[DatePartitionColumn("day", "YYYY-MM-DD")],
     max_date_range=timedelta(days=30)
 )
 
@@ -303,7 +303,7 @@ Returns: `[]` (empty list - no violations)
 **Invalid Query (function on day):**
 ```sql
 SELECT * FROM gridhive.fact.sales_history
-WHERE DATE_FORMAT(day, '%Y-%m') = '2021-09'
+WHERE DATE_FORMAT(day, '%Y-%M') = '2021-09'
 ```
 Returns violation: `PARTITION_COLUMN_WITH_FUNCTION` - Table 'sales_history' uses 'day' column with a function, which disables partitioning.
 
