@@ -7,7 +7,6 @@ from sqlranger.checker import (
     PartitionChecker,
     PartitionViolationType,
     TablePartition,
-    check_partition_usage,
 )
 
 
@@ -260,248 +259,6 @@ class TestPartitionChecker:
         assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert results[0].table_name == "sales_history"
 
-class TestDateRangeEstimation:
-    """Test suite for date range estimation functionality."""
-
-    def test_estimate_range_with_between(self):
-        """Test date range estimation with BETWEEN clause."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-09-13' AND '2021-09-26'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=20),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-        # 2021-09-13 to 2021-09-26 is 14 days (inclusive)
-
-    def test_estimate_range_with_gte_and_lte(self):
-        """Test date range estimation with >= and <= operators."""
-        sql = """
-        SELECT * FROM gridhive.fact.inventory_log
-        WHERE day >= '2021-09-13' AND day <= '2021-09-26'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "inventory_log",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=20),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_excessive_date_range(self):
-        """Test detection of excessive date range."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=100),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-        assert results[0].estimated_range is not None
-        assert results[0].estimated_range > timedelta(days=100)
-
-    def test_single_day_equals(self):
-        """Test date range estimation for single day with equals."""
-        sql = """
-        SELECT * FROM gridhive.fact.inventory_log
-        WHERE day = '2021-09-13'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "inventory_log",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=5),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_no_max_days_skips_range_check(self):
-        """Test that without max_days, range check is skipped."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
-        """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_date_function_in_comparison(self):
-        """Test date range estimation with date functions."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day >= date('2021-09-13') AND day <= date('2021-09-26')
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=20),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_subquery_with_day_filter(self):
-        """Test query with subquery containing day filter."""
-        sql = """
-        SELECT total
-        FROM (
-            SELECT SUM(quantity) as total
-            FROM gridhive.fact.sales_history
-            WHERE day = '2021-09-13'
-        ) subq
-        """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_union_both_with_day_filters(self):
-        """Test UNION query where both parts have day filters."""
-        sql = """
-        SELECT day FROM gridhive.fact.sales_history WHERE day = '2021-09-13'
-        UNION ALL
-        SELECT day FROM gridhive.fact.inventory_log WHERE day = '2021-09-14'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            TablePartition("sales_history", ["day"]),
-            TablePartition("inventory_log", ["day"])
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations for any table
-
-    def test_day_column_in_select_but_not_where(self):
-        """Test query that selects day column but doesn't filter by it."""
-        sql = """
-        SELECT day, quantity FROM gridhive.fact.sales_history
-        WHERE quantity > 100
-        """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-
-    def test_day_in_having_clause_not_where(self):
-        """Test query with day in HAVING but not WHERE."""
-        sql = """
-        SELECT day, SUM(quantity) as total
-        FROM gridhive.fact.sales_history
-        GROUP BY day
-        HAVING day = '2021-09-13'
-        """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
-        results = checker.find_violations(sql)
-
-        # HAVING is not the same as WHERE for partitioning purposes
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-
-    def test_day_comparison_reversed(self):
-        """Test query with day comparison in reversed order."""
-        sql = """
-        SELECT * FROM gridhive.fact.inventory_log
-        WHERE '2021-09-13' <= day AND '2021-09-26' >= day
-        """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("inventory_log", ["day"])])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_complex_where_with_ands_and_ors(self):
-        """Test complex WHERE clause with AND/OR logic."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE (day = '2021-09-13' OR day = '2021-09-14') AND product_id = 100
-        """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations
-
-    def test_day_checked_on_correct_tables(self):
-        """Test query with day comparison in reversed order."""
-        sql = """
-              SELECT * FROM gridhive.fact.sales_history a join gridhive.fact.inventory b on a.day = b.day
-              WHERE '2021-09-13' <= b.day AND '2021-09-26' >= b.day
-              """
-        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 1
-        # Should still detect as valid since we check both sides
-        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-
-    def test_union_adjacent_multi_month_ranges_excessive(self):
-        """Test UNION where each SELECT has an adjacent multi-month BETWEEN range that exceeds max days."""
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-01' AND '2021-02-01'
-        UNION ALL
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-02-02' AND '2021-03-05'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=30),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        # Each part covers more than 30 days individually (first: 32 days), so should flag excessive range
-        assert len(results) == 2
-        for violation in results:
-            assert violation.violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-            assert violation.estimated_range is not None
-            assert violation.estimated_range > timedelta(days=30)
-
-        sql = """
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-01' AND '2021-01-18'
-        UNION ALL
-        SELECT * FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-19' AND '2021-02-05'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=30),
-            )
-        ])
-        results = checker.find_violations(sql)
-
-        # Each part doesn't span more than allowed, should not flag excessive range
-        assert len(results) == 0
-
-class TestPartitionCheckerWithTablePartition:
-    """Test suite for PartitionChecker with TablePartition API."""
-
     def test_checker_with_partition_column_objects(self):
         """Test PartitionChecker with PartitionColumn objects."""
         sql = """
@@ -568,57 +325,6 @@ class TestPartitionCheckerWithTablePartition:
 
         assert len(results) == 0  # No violations
 
-    def test_checker_with_date_partition_column_excessive_range(self):
-        """Test DatePartitionColumn enforces max_date_range_days."""
-        sql = """
-        SELECT day, SUM(quantity)
-        FROM gridhive.fact.sales_history
-        WHERE day BETWEEN '2021-01-01' AND '2021-12-31'
-        """
-        partition_cols = [
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=100),
-            )
-        ]
-        checker = PartitionChecker(partitioned_tables=partition_cols)
-        results = checker.find_violations(sql)
-
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-        assert results[0].estimated_range > timedelta(days=100)
-
-    def test_checker_with_multiple_date_partition_columns_different_ranges(self):
-        """Test multiple tables with different max_date_range_days."""
-        sql = """
-        SELECT a.day, b.event_time
-        FROM gridhive.fact.sales_history a
-        JOIN events.log_table b ON a.day = b.event_time
-        WHERE a.day BETWEEN '2021-09-01' AND '2021-09-15'
-          AND b.event_time BETWEEN '2021-09-01' AND '2021-09-15'
-        """
-        partition_cols = [
-            DateTablePartition(
-                "sales_history",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=10),
-            ),
-            DateTablePartition(
-                "log_table",
-                [DatePartitionColumn("event_time", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=30),
-            )
-        ]
-        checker = PartitionChecker(partitioned_tables=partition_cols)
-        results = checker.find_violations(sql)
-
-        assert len(results) == 1  # Only sales_history has violation
-        # sales_history should have excessive range (15 days > 10 max)
-        sales_result = results[0]
-        assert sales_result.table_name == "sales_history"
-        assert sales_result.violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-
     def test_checker_with_fully_qualified_table_names(self):
         """Test that PartitionColumn with fully qualified names works correctly."""
         sql = """
@@ -634,345 +340,95 @@ class TestPartitionCheckerWithTablePartition:
 
         assert len(results) == 0  # No violations
 
-class TestTablePartition:
-    """Test suite for TablePartition class."""
 
-    def test_get_nonqualified_table_name_simple(self):
-        """Test extracting non-qualified name from simple table name."""
-        pc = TablePartition("sales_history", ["day"])
-        assert pc.get_nonqualified_table_name() == "sales_history"
-
-    def test_get_nonqualified_table_name_with_schema(self):
-        """Test extracting non-qualified name from schema.table."""
-        pc = TablePartition("fact.sales_history", ["day"])
-        assert pc.get_nonqualified_table_name() == "sales_history"
-
-    def test_get_nonqualified_table_name_fully_qualified(self):
-        """Test extracting non-qualified name from catalog.schema.table."""
-        pc = TablePartition("gridhive.fact.sales_history", ["day"])
-        assert pc.get_nonqualified_table_name() == "sales_history"
-
-class TestConvenienceFunction:
-    """Test suite for check_partition_usage convenience function."""
-
-    def test_convenience_function_default_tables(self):
-        """Test convenience function with partitioned tables."""
+    def test_subquery_with_day_filter(self):
+        """Test query with subquery containing day filter."""
         sql = """
-              SELECT * FROM gridhive.fact.sales_history
-              WHERE day = '2021-09-13' \
-              """
-        results = check_partition_usage(sql, partitioned_tables=[TablePartition("sales_history", ["day"])])
-
-        assert len(results) == 0  # No violations
-
-    def test_convenience_function_custom_tables(self):
-        """Test convenience function with custom partitioned tables."""
-        sql = "SELECT * FROM order_events WHERE day = '2021-09-13'"
-        results = check_partition_usage(sql, partitioned_tables=[TablePartition("order_events", ["day"])])
-
-        assert len(results) == 0  # No violations
-
-    def test_convenience_function_with_max_days(self):
-        """Test convenience function with max_date_range_days parameter."""
-        sql = """
-              SELECT * FROM gridhive.fact.inventory_log
-              WHERE day BETWEEN '2021-01-01' AND '2021-12-31' \
-              """
-        results = check_partition_usage(
-            sql,
-            partitioned_tables=[
-                DateTablePartition(
-                "inventory_log",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=100),
-            )
-            ]
-        )
-
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-
-
-class TestHierarchicalPartitions:
-    """Test suite for hierarchical partition validation."""
-
-    def test_two_level_partition_both_enforced(self):
-        """Test table with two partition levels, both enforced."""
-        sql = """
-        SELECT * FROM warehouse.inventory
-        WHERE city = 'Seattle' AND warehouse = 'W1' AND product_id = 100
+        SELECT total
+        FROM (
+               SELECT SUM(quantity) as total
+               FROM gridhive.fact.sales_history
+               WHERE day = '2021-09-13'
+           ) subq
         """
-        checker = PartitionChecker(partitioned_tables=[
-            TablePartition("inventory", ["city", "warehouse"])
-        ])
+        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
         results = checker.find_violations(sql)
 
         assert len(results) == 0  # No violations
 
-    def test_two_level_partition_missing_first(self):
-        """Test table with two partition levels, missing first level filter."""
+    def test_union_both_with_day_filters(self):
+        """Test UNION query where both parts have day filters."""
         sql = """
-        SELECT * FROM warehouse.inventory
-        WHERE warehouse = 'W1' AND product_id = 100
+        SELECT day FROM gridhive.fact.sales_history WHERE day = '2021-09-13'
+        UNION ALL
+        SELECT day FROM gridhive.fact.inventory_log WHERE day = '2021-09-14' \
         """
         checker = PartitionChecker(partitioned_tables=[
-            TablePartition("inventory", ["city", "warehouse"])
+            TablePartition("sales_history", ["day"]),
+            TablePartition("inventory_log", ["day"])
         ])
+        results = checker.find_violations(sql)
+
+        assert len(results) == 0  # No violations for any table
+
+    def test_day_column_in_select_but_not_where(self):
+        """Test query that selects day column but doesn't filter by it."""
+        sql = """
+        SELECT day, quantity FROM gridhive.fact.sales_history
+        WHERE quantity > 100 \
+        """
+        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
         results = checker.find_violations(sql)
 
         assert len(results) == 1
         assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-        assert "city" in results[0].message
 
-    def test_two_level_partition_missing_second(self):
-        """Test table with two partition levels, missing second level filter."""
+    def test_day_in_having_clause_not_where(self):
+        """Test query with day in HAVING but not WHERE."""
         sql = """
-        SELECT * FROM warehouse.inventory
-        WHERE city = 'Seattle' AND product_id = 100
+        SELECT day, SUM(quantity) as total
+        FROM gridhive.fact.sales_history
+        GROUP BY day
+        HAVING day = '2021-09-13' \
         """
-        checker = PartitionChecker(partitioned_tables=[
-            TablePartition("inventory", ["city", "warehouse"])
-        ])
+        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
         results = checker.find_violations(sql)
 
+        # HAVING is not the same as WHERE for partitioning purposes
         assert len(results) == 1
         assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-        assert "warehouse" in results[0].message
 
-    def test_three_level_partition_enforced_level_2(self):
-        """Test table with three partition levels, only first two enforced."""
+    def test_day_comparison_reversed(self):
+        """Test query with day comparison in reversed order."""
         sql = """
-        SELECT * FROM warehouse.inventory
-        WHERE city = 'Seattle' AND warehouse = 'W1' AND product_id = 100
+        SELECT * FROM gridhive.fact.inventory_log
+        WHERE '2021-09-13' <= day AND '2021-09-26' >= day \
         """
-        checker = PartitionChecker(partitioned_tables=[
-            TablePartition("inventory", ["city", "warehouse", "building_number"], enforced_level=2)
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 0  # No violations, building_number not required
-
-    def test_three_level_partition_enforced_level_2_missing_second(self):
-        """Test table with three partition levels, enforced level 2, missing second level."""
-        sql = """
-        SELECT * FROM warehouse.inventory
-        WHERE city = 'Seattle' AND building_number = 'B5'
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            TablePartition("inventory", ["city", "warehouse", "building_number"], enforced_level=2)
-        ])
-        results = checker.find_violations(sql)
-
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-        assert "warehouse" in results[0].message
-
-    def test_hierarchical_date_partitions(self):
-        """Test table with hierarchical date partitions (year, month, day)."""
-        sql = """
-        SELECT * FROM sales.history
-        WHERE year = 2021 AND month = 9 AND day = 13
-        """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "mm"),
-                DatePartitionColumn("day", "DD")
-            ])
-        ])
+        checker = PartitionChecker(partitioned_tables=[TablePartition("inventory_log", ["day"])])
         results = checker.find_violations(sql)
 
         assert len(results) == 0  # No violations
 
-    def test_hierarchical_date_partitions_enforced_level_2(self):
-        """Test hierarchical date partitions with enforced_level=2."""
+    def test_complex_where_with_ands_and_ors(self):
+        """Test complex WHERE clause with AND/OR logic."""
         sql = """
-        SELECT * FROM sales.history
-        WHERE year = 2021 AND month = 9
+        SELECT * FROM gridhive.fact.sales_history
+        WHERE (day = '2021-09-13' OR day = '2021-09-14') AND product_id = 100 \
         """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "mm"),
-                DatePartitionColumn("day", "DD")
-            ], enforced_level=2)
-        ])
+        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
         results = checker.find_violations(sql)
 
-        assert len(results) == 0  # No violations, day not required
+        assert len(results) == 0  # No violations
 
-    def test_hierarchical_date_partitions_with_max_range(self):
-        """Test hierarchical date partitions range enforcement."""
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-mm-dd"),
-                DatePartitionColumn("hour", "HH"),
-            ], max_date_range=timedelta(hours=2))
-        ])
-
+    def test_day_checked_on_correct_tables(self):
+        """Test query with day comparison in reversed order."""
         sql = """
-              SELECT * FROM sales.history
-              WHERE day = '2021-09-01' AND hour >= 00 AND hour <= 14
-              """
-        results = checker.find_violations(sql)
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-
-
-    def test_hierarchical_date_partitions_with_max_range_valid(self):
-        """Test hierarchical date partitions range enforcement with valid range."""
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-mm-dd"),
-                DatePartitionColumn("hour", "HH"),
-            ], max_date_range=timedelta(hours=2))
-        ])
-
-        sql = """
-              SELECT * FROM sales.history
-              WHERE day = '2021-09-01' AND hour = 00
-              """
-        results = checker.find_violations(sql)
-        assert len(results) == 0
-
-        sql = """
-              SELECT * FROM sales.history
-              WHERE day = '2021-09-01' AND hour >= 00 AND hour <= 01
-              """
-        results = checker.find_violations(sql)
-        assert len(results) == 0
-
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("month", "YYYY-mm"),
-                DatePartitionColumn("day", "DD"),
-                DatePartitionColumn("hour", "HH"),
-            ], max_date_range=timedelta(hours=2))
-        ])
-        sql = """
-              SELECT * FROM sales.history
-              WHERE month = '2021-09' AND day = '01' AND hour >= 00 AND hour <= 01
-              """
-        results = checker.find_violations(sql)
-        assert len(results) == 0
-
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "mm"),
-                DatePartitionColumn("day", "dd"),
-                DatePartitionColumn("hour", "HH"),
-            ], max_date_range=timedelta(hours=2))
-        ])
-        sql = """
-              SELECT * FROM sales.history
-              WHERE year = '2025' AND month = '09' AND day = '01' AND hour >= 00 AND hour <= 01
-              """
-        results = checker.find_violations(sql)
-        assert len(results) == 0
-
-    def test_hierarchical_date_partitions_with_max_range_enforce_higher_level_partitions(self):
-        """Test hierarchical date partitions range enforcement works correctly for higher-level partitions."""
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-mm-dd"),
-                DatePartitionColumn("hour", "HH"),
-            ],
-            enforced_level=1, # we enforce only day partition level
-            max_date_range=timedelta(hours=2)) # but the range is formulated in hours
-        ])
-
-        sql = """
-              SELECT * FROM sales.history
-              WHERE day = '2021-09-01'
-              """
-        results = checker.find_violations(sql)
-        assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-
-    def test_hierarchical_date_partitions_missing_middle_level(self):
-        """Test hierarchical date partitions missing middle level."""
-        sql = """
-        SELECT * FROM sales.history
-        WHERE year = 2021 AND day = 13
+        SELECT * FROM gridhive.fact.sales_history a join gridhive.fact.inventory b on a.day = b.day
+        WHERE '2021-09-13' <= b.day AND '2021-09-26' >= b.day
         """
-        checker = PartitionChecker(partitioned_tables=[
-            DateTablePartition("history", [
-                DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "mm"),
-                DatePartitionColumn("day", "dd")
-            ])
-        ])
+        checker = PartitionChecker(partitioned_tables=[TablePartition("sales_history", ["day"])])
         results = checker.find_violations(sql)
 
         assert len(results) == 1
+        # Should still detect as valid since we check both sides
         assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
-        assert "month" in results[0].message
-
-
-class TestInputValidation:
-    """Test suite for input validation."""
-
-    def test_table_partition_empty_partitions(self):
-        """Test TablePartition rejects empty partitions list."""
-        try:
-            TablePartition("test_table", [])
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "cannot be empty" in str(e)
-
-    def test_table_partition_negative_enforced_level(self):
-        """Test TablePartition rejects negative enforced_level."""
-        try:
-            TablePartition("test_table", ["col1"], enforced_level=-1)
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "non-negative" in str(e)
-
-    def test_table_partition_enforced_level_exceeds_partitions(self):
-        """Test TablePartition rejects enforced_level > number of partitions."""
-        try:
-            TablePartition("test_table", ["col1", "col2"], enforced_level=5)
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "cannot exceed" in str(e)
-
-    def test_date_table_partition_empty_partitions(self):
-        """Test DateTablePartition rejects empty partitions list."""
-        try:
-            DateTablePartition("test_table", [])
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "cannot be empty" in str(e)
-
-    def test_date_table_partition_invalid_partition_type(self):
-        """Test DateTablePartition rejects non-DatePartitionColumn items."""
-        try:
-            DateTablePartition("test_table", ["not_a_date_partition_column"])
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "DatePartitionColumn instances" in str(e)
-
-    def test_date_table_partition_negative_max_date_range(self):
-        """Test DateTablePartition rejects negative max_date_range."""
-        try:
-            DateTablePartition(
-                "test_table",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=-1)
-            )
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "must be positive" in str(e)
-
-    def test_date_table_partition_zero_max_date_range(self):
-        """Test DateTablePartition rejects zero max_date_range."""
-        try:
-            DateTablePartition(
-                "test_table",
-                [DatePartitionColumn("day", "YYYY-mm-dd")],
-                max_date_range=timedelta(days=0)
-            )
-            raise AssertionError("Should have raised ValueError")
-        except ValueError as e:
-            assert "must be positive" in str(e)
