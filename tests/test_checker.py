@@ -82,7 +82,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "without a WHERE clause" in results[0].message
         assert results[0].table_name == "sales_history"
 
@@ -96,7 +96,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "without a 'day' column filter" in results[0].message
 
     def test_day_filter_with_function(self):
@@ -199,7 +199,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert results[0].table_name == "sales_history"
 
     def test_case_insensitive_table_names(self):
@@ -211,7 +211,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert results[0].table_name == "sales_history"
 
     def test_invalid_sql_incomplete_query(self):
@@ -257,7 +257,7 @@ class TestPartitionChecker:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert results[0].table_name == "sales_history"
 
 class TestDateRangeEstimation:
@@ -403,7 +403,7 @@ class TestDateRangeEstimation:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
 
     def test_day_in_having_clause_not_where(self):
         """Test query with day in HAVING but not WHERE."""
@@ -418,7 +418,7 @@ class TestDateRangeEstimation:
 
         # HAVING is not the same as WHERE for partitioning purposes
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
 
     def test_day_comparison_reversed(self):
         """Test query with day comparison in reversed order."""
@@ -453,7 +453,7 @@ class TestDateRangeEstimation:
 
         assert len(results) == 1
         # Should still detect as valid since we check both sides
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
 
     def test_union_adjacent_multi_month_ranges_excessive(self):
         """Test UNION where each SELECT has an adjacent multi-month BETWEEN range that exceeds max days."""
@@ -546,7 +546,7 @@ class TestPartitionCheckerWithTablePartition:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "event_date" in results[0].message
 
     def test_checker_with_date_partition_column(self):
@@ -721,7 +721,7 @@ class TestHierarchicalPartitions:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "city" in results[0].message
 
     def test_two_level_partition_missing_second(self):
@@ -736,7 +736,7 @@ class TestHierarchicalPartitions:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "warehouse" in results[0].message
 
     def test_three_level_partition_enforced_level_2(self):
@@ -764,7 +764,7 @@ class TestHierarchicalPartitions:
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "warehouse" in results[0].message
 
     def test_hierarchical_date_partitions(self):
@@ -777,7 +777,7 @@ class TestHierarchicalPartitions:
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
                 DatePartitionColumn("month", "MM"),
-                DatePartitionColumn("day", "dd")
+                DatePartitionColumn("day", "DD")
             ])
         ])
         results = checker.find_violations(sql)
@@ -794,7 +794,7 @@ class TestHierarchicalPartitions:
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
                 DatePartitionColumn("month", "MM"),
-                DatePartitionColumn("day", "dd")
+                DatePartitionColumn("day", "DD")
             ], enforced_level=2)
         ])
         results = checker.find_violations(sql)
@@ -845,7 +845,7 @@ class TestHierarchicalPartitions:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
                 DatePartitionColumn("month", "YYYY-MM"),
-                DatePartitionColumn("day", "dd"),
+                DatePartitionColumn("day", "DD"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
         ])
@@ -860,7 +860,7 @@ class TestHierarchicalPartitions:
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
                 DatePartitionColumn("month", "MM"),
-                DatePartitionColumn("day", "dd"),
+                DatePartitionColumn("day", "DD"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
         ])
@@ -900,11 +900,79 @@ class TestHierarchicalPartitions:
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
                 DatePartitionColumn("month", "MM"),
-                DatePartitionColumn("day", "dd")
+                DatePartitionColumn("day", "DD")
             ])
         ])
         results = checker.find_violations(sql)
 
         assert len(results) == 1
-        assert results[0].violation == PartitionViolationType.MISSING_DAY_FILTER
+        assert results[0].violation == PartitionViolationType.MISSING_PARTITION_FILTER
         assert "month" in results[0].message
+
+
+class TestInputValidation:
+    """Test suite for input validation."""
+
+    def test_table_partition_empty_partitions(self):
+        """Test TablePartition rejects empty partitions list."""
+        try:
+            TablePartition("test_table", [])
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "cannot be empty" in str(e)
+
+    def test_table_partition_negative_enforced_level(self):
+        """Test TablePartition rejects negative enforced_level."""
+        try:
+            TablePartition("test_table", ["col1"], enforced_level=-1)
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "non-negative" in str(e)
+
+    def test_table_partition_enforced_level_exceeds_partitions(self):
+        """Test TablePartition rejects enforced_level > number of partitions."""
+        try:
+            TablePartition("test_table", ["col1", "col2"], enforced_level=5)
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "cannot exceed" in str(e)
+
+    def test_date_table_partition_empty_partitions(self):
+        """Test DateTablePartition rejects empty partitions list."""
+        try:
+            DateTablePartition("test_table", [])
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "cannot be empty" in str(e)
+
+    def test_date_table_partition_invalid_partition_type(self):
+        """Test DateTablePartition rejects non-DatePartitionColumn items."""
+        try:
+            DateTablePartition("test_table", ["not_a_date_partition_column"])
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "DatePartitionColumn instances" in str(e)
+
+    def test_date_table_partition_negative_max_date_range(self):
+        """Test DateTablePartition rejects negative max_date_range."""
+        try:
+            DateTablePartition(
+                "test_table",
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                max_date_range=timedelta(days=-1)
+            )
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "must be positive" in str(e)
+
+    def test_date_table_partition_zero_max_date_range(self):
+        """Test DateTablePartition rejects zero max_date_range."""
+        try:
+            DateTablePartition(
+                "test_table",
+                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                max_date_range=timedelta(days=0)
+            )
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "must be positive" in str(e)

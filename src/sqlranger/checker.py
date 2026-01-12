@@ -36,7 +36,20 @@ class TablePartition:
             table_name: Full table name (e.g., 'gridhive.fact.sales_history').
             partitions: Ordered list of partition column names from root to smallest sub-partition.
             enforced_level: Number of partition levels to enforce. If None, all partitions are enforced.
+
+        Raises:
+            ValueError: If partitions list is empty, enforced_level is negative,
+                       or enforced_level exceeds the number of partitions.
         """
+        if not partitions:
+            raise ValueError("partitions list cannot be empty")
+        if enforced_level is not None and enforced_level < 0:
+            raise ValueError(f"enforced_level must be non-negative, got {enforced_level}")
+        if enforced_level is not None and enforced_level > len(partitions):
+            raise ValueError(
+                f"enforced_level ({enforced_level}) cannot exceed number of partitions ({len(partitions)})"
+            )
+
         self.table_name = table_name
         self.partitions = partitions
         self.enforced_level = enforced_level if enforced_level is not None else len(partitions)
@@ -83,7 +96,18 @@ class DateTablePartition(TablePartition):
             partitions: Ordered list of DatePartitionColumn objects from root to smallest sub-partition.
             enforced_level: Number of partition levels to enforce. If None, all partitions are enforced.
             max_date_range: Maximum allowed date range as timedelta. If None, range is not checked.
+
+        Raises:
+            ValueError: If partitions list is empty, contains non-DatePartitionColumn items,
+                       or max_date_range is not positive.
         """
+        if not partitions:
+            raise ValueError("partitions list cannot be empty")
+        if not all(isinstance(p, DatePartitionColumn) for p in partitions):
+            raise ValueError("All items in partitions list must be DatePartitionColumn instances")
+        if max_date_range is not None and max_date_range.total_seconds() <= 0:
+            raise ValueError(f"max_date_range must be positive, got {max_date_range}")
+
         # Extract column names for parent class
         column_names = [p.column_name for p in partitions]
         super().__init__(table_name, column_names, enforced_level)
@@ -94,7 +118,7 @@ class DateTablePartition(TablePartition):
 class PartitionViolationType(Enum):
     """Type of partition check violation."""
 
-    MISSING_DAY_FILTER = "MISSING_DAY_FILTER"
+    MISSING_PARTITION_FILTER = "MISSING_PARTITION_FILTER"
     PARTITION_COLUMN_WITH_FUNCTION = "PARTITION_COLUMN_WITH_FUNCTION"
     NO_FINITE_RANGE = "NO_FINITE_RANGE"
     EXCESSIVE_DATE_RANGE = "EXCESSIVE_DATE_RANGE"
@@ -213,7 +237,7 @@ class PartitionChecker:
         if not where_clauses:
             missing_columns = ", ".join(f"'{col}'" for col in enforced_partitions)
             return PartitionViolation(
-                violation=PartitionViolationType.MISSING_DAY_FILTER,
+                violation=PartitionViolationType.MISSING_PARTITION_FILTER,
                 message=f"Table '{table_name}' is used without a WHERE clause containing filters for {missing_columns}",
                 table_name=table_name,
             )
@@ -228,7 +252,7 @@ class PartitionChecker:
 
             if not partition_conditions:
                 return PartitionViolation(
-                    violation=PartitionViolationType.MISSING_DAY_FILTER,
+                    violation=PartitionViolationType.MISSING_PARTITION_FILTER,
                     message=f"Table '{table_name}' is used without a '{column_name}' column filter in WHERE clause",
                     table_name=table_name,
                 )

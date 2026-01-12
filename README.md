@@ -141,7 +141,7 @@ partition_config = DateTablePartition(
     partitions=[
         DatePartitionColumn("year", "YYYY"),
         DatePartitionColumn("month", "MM"),
-        DatePartitionColumn("day", "dd"),
+        DatePartitionColumn("day", "DD"),
         DatePartitionColumn("hour", "HH")
     ],
     enforced_level=4,  # All 4 levels must be specified
@@ -204,7 +204,7 @@ dtp = DateTablePartition(
     partitions=[
         DatePartitionColumn("year", "YYYY"),
         DatePartitionColumn("month", "MM"),
-        DatePartitionColumn("day", "dd")
+        DatePartitionColumn("day", "DD")
     ],
     enforced_level=3,  # All 3 levels enforced
     max_date_range=timedelta(days=90)
@@ -215,7 +215,31 @@ dtp = DateTablePartition(
 
 `DatePartitionColumn` is a dataclass that represents a single date partition column:
 - `column_name`: Name of the partition column
-- `format_pattern`: Date format pattern (e.g., "YYYY", "MM", "dd", "HH")
+- `format_pattern`: Date format pattern
+
+**Supported Format Patterns:**
+
+| Pattern | Description | Example Value |
+|---------|-------------|---------------|
+| `YYYY` | 4-digit year | `2021` |
+| `Y` | Year (short form) | `2021` |
+| `MM` | 2-digit month | `09` |
+| `M` | Month (short form) | `9` |
+| `DD` | 2-digit day | `13` |
+| `D` | Day (short form) | `13` |
+| `HH` | 2-digit hour (24-hour format) | `14` |
+| `H` | Hour (short form) | `14` |
+| `mm` | 2-digit minute | `30` |
+| `SS` | 2-digit second | `45` |
+| `S` | Second (short form) | `45` |
+| `YYYY-MM-DD` | Full date string | `2021-09-13` |
+| `YYYY-MM` | Year-month string | `2021-09` |
+
+**Notes:**
+- Format patterns are case-sensitive for disambiguation (e.g., `MM` for month vs `mm` for minute)
+- Use uppercase `DD` for days, not lowercase `dd`
+- Composite patterns like `YYYY-MM-DD` are parsed as complete date strings
+- When using individual components, each partition column should have its own `DatePartitionColumn`
 
 **Example:**
 ```python
@@ -224,7 +248,11 @@ from sqlranger import DatePartitionColumn
 # Define individual date partition columns
 year_col = DatePartitionColumn("year", "YYYY")
 month_col = DatePartitionColumn("month", "MM")
-day_col = DatePartitionColumn("day", "dd")
+day_col = DatePartitionColumn("day", "DD")
+hour_col = DatePartitionColumn("hour", "HH")
+
+# Or use a full date format for a single column
+full_date_col = DatePartitionColumn("day", "YYYY-MM-DD")
 ```
 
 ### Validation Rules
