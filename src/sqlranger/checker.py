@@ -653,10 +653,10 @@ class PartitionChecker:
 
                 # Basic component presence flags
                 has_year = "YYYY" in upper_pattern or upper_pattern == "Y"
-                has_month = "MM" in format_pattern or format_pattern == "M"
+                has_month = "mm" in format_pattern or format_pattern == "m"
                 has_day = "DD" in upper_pattern or upper_pattern == "D"
                 has_hour = "HH" in upper_pattern or upper_pattern == "H"
-                has_minute_token = "mm" in format_pattern or format_pattern == "m"
+                has_minute_token = "MM" in format_pattern or format_pattern == "M"
                 has_seconds_token = "SS" in upper_pattern or upper_pattern == "S"
                 # More specific composite patterns
                 has_full_date = (
@@ -693,8 +693,7 @@ class PartitionChecker:
                     day = int(value)
                 elif has_hour:
                     hour = int(value)
-                elif has_minute_token and not has_hour and not has_year:
-                    # minute (lowercase mm when not part of a year or hour pattern)
+                elif has_minute_token:
                     minute = int(value)
                 elif has_seconds_token:
                     second = int(value)
@@ -732,13 +731,13 @@ class PartitionChecker:
 
                 if "SS" in format_upper or format_upper == "S":
                     return 1.0  # second
-                if "mm" in format_pattern or format_pattern == "m":
+                if "MM" in format_pattern or format_pattern == "M":
                     return 60.0  # minute
                 if "HH" in format_upper or format_upper == "H":
                     return 3600.0  # hour
                 if "DD" in format_upper or format_upper == "D":
                     return 86400.0  # day
-                if "MM" in format_pattern or format_pattern == "M":
+                if "mm" in format_pattern or format_pattern == "m":
                     return 86400.0 * 30  # month (approximate)
                 if "YYYY" in format_upper or format_upper == "Y":
                     return 86400.0 * 365  # year (approximate)
@@ -750,7 +749,7 @@ class PartitionChecker:
         Estimate the date range in seconds from conditions.
 
         This is a best-effort estimation that only works with:
-        - String date literals in YYYY-MM-DD format
+        - String date literals in YYYY-mm-dd format
         - Simple date function calls (date, from_iso8601_date)
 
         Args:
@@ -842,7 +841,7 @@ class PartitionChecker:
 
     def _parse_date_string(self, date_str: str) -> datetime | None:
         """
-        Parse a date string in YYYY-MM-DD format.
+        Parse a date string in YYYY-mm-dd format.
 
         Args:
             date_str: Date string to parse.

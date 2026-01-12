@@ -101,12 +101,12 @@ from sqlranger import PartitionChecker, DateTablePartition, DatePartitionColumn
 partition_cols = [
     DateTablePartition(
         "gridhive.fact.sales_history",
-        partitions=[DatePartitionColumn("day", "YYYY-MM-dd")],
+        partitions=[DatePartitionColumn("day", "YYYY-mm-dd")],
         max_date_range=timedelta(days=30)
     ),
     DateTablePartition(
         "events.log_table",
-        partitions=[DatePartitionColumn("event_time", "YYYY-MM-dd")],
+        partitions=[DatePartitionColumn("event_time", "YYYY-mm-dd")],
         max_date_range=timedelta(days=7)
     ),
 ]
@@ -140,8 +140,8 @@ partition_config = DateTablePartition(
     "gridhive.fact.sales_history",
     partitions=[
         DatePartitionColumn("year", "YYYY"),
-        DatePartitionColumn("month", "MM"),
-        DatePartitionColumn("day", "DD"),
+        DatePartitionColumn("month", "mm"),
+        DatePartitionColumn("day", "dd"),
         DatePartitionColumn("hour", "HH")
     ],
     enforced_level=4,  # All 4 levels must be specified
@@ -194,7 +194,7 @@ from sqlranger import DateTablePartition, DatePartitionColumn
 # Single date partition with max range
 dtp = DateTablePartition(
     "gridhive.fact.sales_history",
-    partitions=[DatePartitionColumn("day", "YYYY-MM-DD")],
+    partitions=[DatePartitionColumn("day", "YYYY-mm-dd")],
     max_date_range=timedelta(days=30)
 )
 
@@ -203,8 +203,8 @@ dtp = DateTablePartition(
     "gridhive.fact.sales_history",
     partitions=[
         DatePartitionColumn("year", "YYYY"),
-        DatePartitionColumn("month", "MM"),
-        DatePartitionColumn("day", "DD")
+        DatePartitionColumn("month", "mm"),
+        DatePartitionColumn("day", "dd")
     ],
     enforced_level=3,  # All 3 levels enforced
     max_date_range=timedelta(days=90)
@@ -219,26 +219,26 @@ dtp = DateTablePartition(
 
 **Supported Format Patterns:**
 
-| Pattern | Description | Example Value |
-|---------|-------------|---------------|
-| `YYYY` | 4-digit year | `2021` |
-| `Y` | Year (short form) | `2021` |
-| `MM` | 2-digit month | `09` |
-| `M` | Month (short form) | `9` |
-| `DD` | 2-digit day | `13` |
-| `D` | Day (short form) | `13` |
-| `HH` | 2-digit hour (24-hour format) | `14` |
-| `H` | Hour (short form) | `14` |
-| `mm` | 2-digit minute | `30` |
-| `SS` | 2-digit second | `45` |
-| `S` | Second (short form) | `45` |
-| `YYYY-MM-DD` | Full date string | `2021-09-13` |
-| `YYYY-MM` | Year-month string | `2021-09` |
+| Pattern      | Description                   | Example Value |
+|--------------|-------------------------------|---------------|
+| `YYYY`       | 4-digit year                  | `2021`        |
+| `Y`          | Year (short form)             | `2021`        |
+| `mm`         | 2-digit month                 | `09`          |
+| `m`          | Month (short form)            | `9`           |
+| `dd`         | 2-digit day                   | `13`          |
+| `d`          | Day (short form)              | `13`          |
+| `HH`         | 2-digit hour (24-hour format) | `14`          |
+| `H`          | Hour (short form)             | `14`          |
+| `MM`         | 2-digit minute                | `03`          |
+| `M`          | Minutes (short form)          | `3`           |
+| `SS`         | 2-digit second                | `45`          |
+| `S`          | Second (short form)           | `45`          |
+| `YYYY-mm-dd` | Full date string              | `2021-09-13`  |
+| `YYYY-mm`    | Year-month string             | `2021-09`     |
 
 **Notes:**
-- Format patterns are case-sensitive for disambiguation (e.g., `MM` for month vs `mm` for minute)
-- Use uppercase `DD` for days, not lowercase `dd`
-- Composite patterns like `YYYY-MM-DD` are parsed as complete date strings
+- Format patterns are case-sensitive for disambiguation (e.g., `mm` for month vs `MM` for minute)
+- Composite patterns like `YYYY-mm-dd` are parsed as complete date strings
 - When using individual components, each partition column should have its own `DatePartitionColumn`
 
 **Example:**
@@ -247,12 +247,12 @@ from sqlranger import DatePartitionColumn
 
 # Define individual date partition columns
 year_col = DatePartitionColumn("year", "YYYY")
-month_col = DatePartitionColumn("month", "MM")
-day_col = DatePartitionColumn("day", "DD")
+month_col = DatePartitionColumn("month", "mm")
+day_col = DatePartitionColumn("day", "dd")
 hour_col = DatePartitionColumn("hour", "HH")
 
 # Or use a full date format for a single column
-full_date_col = DatePartitionColumn("day", "YYYY-MM-DD")
+full_date_col = DatePartitionColumn("day", "YYYY-mm-dd")
 ```
 
 ### Validation Rules

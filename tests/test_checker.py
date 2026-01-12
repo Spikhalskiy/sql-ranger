@@ -307,7 +307,7 @@ class TestDateRangeEstimation:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=100),
             )
         ])
@@ -467,7 +467,7 @@ class TestDateRangeEstimation:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=30),
             )
         ])
@@ -578,7 +578,7 @@ class TestPartitionCheckerWithTablePartition:
         partition_cols = [
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=100),
             )
         ]
@@ -601,12 +601,12 @@ class TestPartitionCheckerWithTablePartition:
         partition_cols = [
             DateTablePartition(
                 "sales_history",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=10),
             ),
             DateTablePartition(
                 "log_table",
-                [DatePartitionColumn("event_time", "YYYY-MM-dd")],
+                [DatePartitionColumn("event_time", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=30),
             )
         ]
@@ -683,7 +683,7 @@ class TestConvenienceFunction:
             partitioned_tables=[
                 DateTablePartition(
                 "inventory_log",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=100),
             )
             ]
@@ -776,7 +776,7 @@ class TestHierarchicalPartitions:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "MM"),
+                DatePartitionColumn("month", "mm"),
                 DatePartitionColumn("day", "DD")
             ])
         ])
@@ -793,7 +793,7 @@ class TestHierarchicalPartitions:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "MM"),
+                DatePartitionColumn("month", "mm"),
                 DatePartitionColumn("day", "DD")
             ], enforced_level=2)
         ])
@@ -805,7 +805,7 @@ class TestHierarchicalPartitions:
         """Test hierarchical date partitions range enforcement."""
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-MM-dd"),
+                DatePartitionColumn("day", "YYYY-mm-dd"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
         ])
@@ -823,7 +823,7 @@ class TestHierarchicalPartitions:
         """Test hierarchical date partitions range enforcement with valid range."""
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-MM-dd"),
+                DatePartitionColumn("day", "YYYY-mm-dd"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
         ])
@@ -844,7 +844,7 @@ class TestHierarchicalPartitions:
 
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
-                DatePartitionColumn("month", "YYYY-MM"),
+                DatePartitionColumn("month", "YYYY-mm"),
                 DatePartitionColumn("day", "DD"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
@@ -859,8 +859,8 @@ class TestHierarchicalPartitions:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "MM"),
-                DatePartitionColumn("day", "DD"),
+                DatePartitionColumn("month", "mm"),
+                DatePartitionColumn("day", "dd"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
         ])
@@ -875,7 +875,7 @@ class TestHierarchicalPartitions:
         """Test hierarchical date partitions range enforcement works correctly for higher-level partitions."""
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
-                DatePartitionColumn("day", "YYYY-MM-dd"),
+                DatePartitionColumn("day", "YYYY-mm-dd"),
                 DatePartitionColumn("hour", "HH"),
             ],
             enforced_level=1, # we enforce only day partition level
@@ -899,8 +899,8 @@ class TestHierarchicalPartitions:
         checker = PartitionChecker(partitioned_tables=[
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
-                DatePartitionColumn("month", "MM"),
-                DatePartitionColumn("day", "DD")
+                DatePartitionColumn("month", "mm"),
+                DatePartitionColumn("day", "dd")
             ])
         ])
         results = checker.find_violations(sql)
@@ -958,7 +958,7 @@ class TestInputValidation:
         try:
             DateTablePartition(
                 "test_table",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=-1)
             )
             raise AssertionError("Should have raised ValueError")
@@ -970,7 +970,7 @@ class TestInputValidation:
         try:
             DateTablePartition(
                 "test_table",
-                [DatePartitionColumn("day", "YYYY-MM-DD")],
+                [DatePartitionColumn("day", "YYYY-mm-dd")],
                 max_date_range=timedelta(days=0)
             )
             raise AssertionError("Should have raised ValueError")
