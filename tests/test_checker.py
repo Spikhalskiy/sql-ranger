@@ -860,7 +860,7 @@ class TestHierarchicalPartitions:
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
                 DatePartitionColumn("month", "mm"),
-                DatePartitionColumn("day", "DD"),
+                DatePartitionColumn("day", "dd"),
                 DatePartitionColumn("hour", "HH"),
             ], max_date_range=timedelta(hours=2))
         ])
@@ -900,7 +900,7 @@ class TestHierarchicalPartitions:
             DateTablePartition("history", [
                 DatePartitionColumn("year", "YYYY"),
                 DatePartitionColumn("month", "mm"),
-                DatePartitionColumn("day", "DD")
+                DatePartitionColumn("day", "dd")
             ])
         ])
         results = checker.find_violations(sql)
