@@ -224,7 +224,7 @@ class TestPartitionChecker:
         assert results[0].violation == PartitionViolationType.QUERY_INVALID_SYNTAX
         assert "Failed to parse SQL query" in results[0].message
         assert results[0].table_name is None
-        assert results[0].estimated_days is None
+        assert results[0].estimated_range is None
 
     def test_cte(self):
         """Test query with CTE containing day filter."""
@@ -315,8 +315,8 @@ class TestDateRangeEstimation:
 
         assert len(results) == 1
         assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-        assert results[0].estimated_days is not None
-        assert results[0].estimated_days > 100
+        assert results[0].estimated_range is not None
+        assert results[0].estimated_range > timedelta(days=100)
 
     def test_single_day_equals(self):
         """Test date range estimation for single day with equals."""
@@ -477,8 +477,8 @@ class TestDateRangeEstimation:
         assert len(results) == 2
         for violation in results:
             assert violation.violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-            assert violation.estimated_days is not None
-            assert violation.estimated_days > 30
+            assert violation.estimated_range is not None
+            assert violation.estimated_range > timedelta(days=30)
 
         sql = """
         SELECT * FROM gridhive.fact.sales_history
@@ -587,7 +587,7 @@ class TestPartitionCheckerWithTablePartition:
 
         assert len(results) == 1
         assert results[0].violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
-        assert results[0].estimated_days > 100
+        assert results[0].estimated_range > timedelta(days=100)
 
     def test_checker_with_multiple_date_partition_columns_different_ranges(self):
         """Test multiple tables with different max_date_range_days."""

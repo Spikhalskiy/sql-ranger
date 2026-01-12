@@ -132,7 +132,7 @@ class PartitionViolation:
     violation: PartitionViolationType
     message: str
     table_name: str | None = None
-    estimated_days: int | None = None
+    estimated_range: timedelta | None = None
 
 
 class PartitionChecker:
@@ -184,7 +184,7 @@ class PartitionChecker:
                     violation=PartitionViolationType.QUERY_INVALID_SYNTAX,
                     message=f"Failed to parse SQL query: {e!s}",
                     table_name=None,
-                    estimated_days=None,
+                    estimated_range=None,
                 )
             ]
 
@@ -301,16 +301,17 @@ class PartitionChecker:
 
             max_seconds = partition_config.max_date_range.total_seconds()
             if estimated_seconds is not None and estimated_seconds > max_seconds:
-                estimated_days = estimated_seconds / 86400.0
-                max_days = max_seconds / 86400.0
+                estimated_range = timedelta(seconds=estimated_seconds)
+                estimated_str = self._format_time_range(estimated_seconds)
+                max_str = self._format_time_range(max_seconds)
                 return PartitionViolation(
                     violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
                     message=(
                         f"Table '{table_name}' has an excessive date range of approximately "
-                        f"{estimated_days} days (max: {max_days})"
+                        f"{estimated_str} (max: {max_str})"
                     ),
                     table_name=table_name,
-                    estimated_days=estimated_days,
+                    estimated_range=estimated_range,
                 )
 
         return None
@@ -469,6 +470,33 @@ class PartitionChecker:
                 has_upper_bound = True
 
         return has_between or has_equals or (has_lower_bound and has_upper_bound)
+
+    def _format_time_range(self, seconds: float) -> str:
+        """
+        Format a time range in seconds to a human-readable string.
+
+        Selects the most appropriate unit (seconds, minutes, hours, days) based on magnitude.
+
+        Args:
+            seconds: Time range in seconds
+
+        Returns:
+            Formatted string like "2 hours" or "1.5 days"
+        """
+        if seconds < 60:
+            # Less than 1 minute - show in seconds
+            return f"{seconds:.1f} seconds" if seconds != 1 else "1 second"
+        if seconds < 3600:
+            # Less than 1 hour - show in minutes
+            minutes = seconds / 60
+            return f"{minutes:.1f} minutes" if minutes != 1 else "1 minute"
+        if seconds < 86400:
+            # Less than 1 day - show in hours
+            hours = seconds / 3600
+            return f"{hours:.1f} hours" if hours != 1 else "1 hour"
+        # 1 day or more - show in days
+        days = seconds / 86400
+        return f"{days:.1f} days" if days != 1 else "1 day"
 
     def _estimate_hierarchical_time_range(
         self,
