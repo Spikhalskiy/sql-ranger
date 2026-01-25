@@ -271,6 +271,8 @@ class PartitionChecker:
                     )
 
             # Check for finite range
+            # Note: We don't fail here if there's an OR - we let it continue to range estimation
+            # which will detect it as excessive
             if not self._has_finite_range(partition_conditions):
                 return PartitionViolation(
                     violation=PartitionViolationType.NO_FINITE_RANGE,
@@ -287,16 +289,23 @@ class PartitionChecker:
             and enforced_partitions):
             # Collect conditions for each enforced partition column
             conditions_by_column = {}
+            has_or_by_column = {}
             for column_name in enforced_partitions:
                 column_conditions = []
                 for where in where_clauses:
                     conditions = self._extract_partition_conditions(where, table_name, column_name)
                     column_conditions.extend(conditions)
                 conditions_by_column[column_name] = column_conditions
+                
+                # Check if any WHERE clause has OR between partition conditions
+                has_or_by_column[column_name] = any(
+                    self._has_or_between_partition_conditions(where.this, table_name, column_name)
+                    for where in where_clauses
+                )
 
             # Estimate the time range from all partition levels combined
             estimated_seconds = self._estimate_hierarchical_time_range(
-                conditions_by_column, partition_config.date_partitions
+                conditions_by_column, partition_config.date_partitions, has_or_by_column
             )
 
             max_seconds = partition_config.max_date_range.total_seconds()
@@ -352,6 +361,10 @@ class PartitionChecker:
         """
         Extract conditions involving the partition column from a WHERE clause.
 
+        This method walks the expression tree and extracts conditions that are properly
+        ANDed together. If partition column conditions are separated by OR operators,
+        they are still returned but additional validation is needed.
+
         Args:
             where: WHERE clause expression.
             table_name: Name of the table to extract the partition conditions for.
@@ -360,13 +373,108 @@ class PartitionChecker:
         Returns:
             List of expressions that reference the partition column.
         """
-        partition_conditions = []
+        conditions = self._extract_conditions_from_tree(where.this, table_name, column_name)
+        
+        # Check if the conditions are properly ANDed or if there's problematic OR usage
+        if conditions and self._has_or_between_partition_conditions(where.this, table_name, column_name):
+            # If there's an OR between partition conditions, we need to be more careful
+            # Mark this by returning a special marker or handle it differently
+            # For now, we'll let the conditions through but the range check will fail
+            pass
+        
+        return conditions
 
-        # Find all comparison and BETWEEN expressions
-        for node in where.walk():
-            is_comparison = isinstance(node, (exp.EQ, exp.LT, exp.LTE, exp.GT, exp.GTE, exp.Between))
-            if is_comparison and self._references_column_of_table(node, table_name, column_name):
-                partition_conditions.append(node)
+    def _has_or_between_partition_conditions(
+        self, node: exp.Expression, table_name: str, column_name: str
+    ) -> bool:
+        """
+        Check if there's an OR operator that directly separates partition column conditions.
+
+        Exception: ORs between equality conditions (e.g., day = X OR day = Y) are allowed
+        as they represent specific partitions.
+
+        Args:
+            node: Expression node to check.
+            table_name: Name of the table.
+            column_name: Name of the partition column.
+
+        Returns:
+            True if partition conditions are separated by OR in a way that creates infinite range.
+        """
+        if isinstance(node, exp.Or):
+            # Check if both sides have partition conditions
+            left_has = self._subtree_references_column(node.this, table_name, column_name)
+            right_has = self._subtree_references_column(node.expression, table_name, column_name)
+            
+            if left_has and right_has:
+                # Both sides reference the partition column
+                # Check if all partition conditions are equality conditions
+                left_conditions = self._extract_conditions_from_tree(node.this, table_name, column_name)
+                right_conditions = self._extract_conditions_from_tree(node.expression, table_name, column_name)
+                all_conditions = left_conditions + right_conditions
+                
+                # If all conditions are equality, this is acceptable (e.g., day = X OR day = Y)
+                if all_conditions and all(isinstance(c, exp.EQ) for c in all_conditions):
+                    return False
+                
+                # Otherwise, OR between partition conditions is problematic
+                return True
+        
+        # Recursively check children
+        if isinstance(node, (exp.And, exp.Or)):
+            left_has_or = self._has_or_between_partition_conditions(node.this, table_name, column_name)
+            right_has_or = self._has_or_between_partition_conditions(node.expression, table_name, column_name)
+            return left_has_or or right_has_or
+        
+        return False
+
+    def _subtree_references_column(
+        self, node: exp.Expression, table_name: str, column_name: str
+    ) -> bool:
+        """
+        Check if any node in the subtree references the specified column.
+
+        Args:
+            node: Root of the subtree.
+            table_name: Name of the table.
+            column_name: Name of the column.
+
+        Returns:
+            True if the subtree contains a reference to the column.
+        """
+        for child in node.walk():
+            is_comparison = isinstance(child, (exp.EQ, exp.LT, exp.LTE, exp.GT, exp.GTE, exp.Between))
+            if is_comparison and self._references_column_of_table(child, table_name, column_name):
+                return True
+        return False
+
+    def _extract_conditions_from_tree(
+        self, node: exp.Expression, table_name: str, column_name: str
+    ) -> list[exp.Expression]:
+        """
+        Recursively extract partition conditions from an expression tree.
+
+        This extracts all conditions regardless of logical operators. The caller should
+        check if they're properly connected with AND operators.
+
+        Args:
+            node: Expression node to process.
+            table_name: Name of the table to extract the partition conditions for.
+            column_name: Name of the partition column.
+
+        Returns:
+            List of partition column conditions found in the tree.
+        """
+        # Base case: if this is a comparison that references our column, return it
+        is_comparison = isinstance(node, (exp.EQ, exp.LT, exp.LTE, exp.GT, exp.GTE, exp.Between))
+        if is_comparison and self._references_column_of_table(node, table_name, column_name):
+            return [node]
+
+        # Recursively collect from all children
+        partition_conditions = []
+        for child in node.iter_expressions():
+            conditions = self._extract_conditions_from_tree(child, table_name, column_name)
+            partition_conditions.extend(conditions)
 
         return partition_conditions
 
@@ -502,6 +610,7 @@ class PartitionChecker:
         self,
         conditions_by_column: dict[str, list[exp.Expression]],
         date_partitions: list,
+        has_or_by_column: dict[str, bool] | None = None,
     ) -> float | None:
         """
         Estimate time range from hierarchical date partition conditions.
@@ -514,10 +623,20 @@ class PartitionChecker:
         Args:
             conditions_by_column: Dictionary mapping column names to their conditions
             date_partitions: List of DatePartitionColumn objects with format info
+            has_or_by_column: Dictionary indicating if OR operators separate conditions for each column
 
         Returns:
-            Estimated range in seconds, or None if cannot be estimated
+            Estimated range in seconds, or None if cannot be estimated.
+            Returns a very large value (100 years) if OR operators make the range effectively infinite.
         """
+        # Check if any column has OR between its conditions
+        if has_or_by_column:
+            for column_name in conditions_by_column:
+                if has_or_by_column.get(column_name, False):
+                    # OR between partition conditions makes the range effectively infinite
+                    # Return a very large value (100 years in seconds)
+                    return 100 * 365.25 * 24 * 3600
+        
         # Extract value ranges for each partition level
         values_by_column = {}
         for date_partition in date_partitions:
