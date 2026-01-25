@@ -11,6 +11,11 @@ from enum import Enum
 import sqlglot
 from sqlglot import exp
 
+# When OR operators separate partition conditions (e.g., day >= X OR day <= Y),
+# the effective range is infinite. We use a very large value (100 years in seconds)
+# to represent this for range estimation, which will trigger EXCESSIVE_DATE_RANGE.
+INFINITE_RANGE_SECONDS = 100 * 365.25 * 24 * 3600
+
 
 @dataclass
 class DatePartitionColumn:
@@ -270,9 +275,10 @@ class PartitionChecker:
                         table_name=table_name,
                     )
 
-            # Check for finite range
-            # Note: We don't fail here if there's an OR - we let it continue to range estimation
-            # which will detect it as excessive
+            # Check for finite range (e.g., BETWEEN, =, or both >= and <=)
+            # Note: OR operators between partition conditions are detected later during
+            # range estimation for DateTablePartition, where they trigger EXCESSIVE_DATE_RANGE.
+            # For basic TablePartition, OR conditions still allow the partition filter check to pass.
             if not self._has_finite_range(partition_conditions):
                 return PartitionViolation(
                     violation=PartitionViolationType.NO_FINITE_RANGE,
@@ -296,7 +302,7 @@ class PartitionChecker:
                     conditions = self._extract_partition_conditions(where, table_name, column_name)
                     column_conditions.extend(conditions)
                 conditions_by_column[column_name] = column_conditions
-                
+
                 # Check if any WHERE clause has OR between partition conditions
                 has_or_by_column[column_name] = any(
                     self._has_or_between_partition_conditions(where.this, table_name, column_name)
@@ -373,16 +379,7 @@ class PartitionChecker:
         Returns:
             List of expressions that reference the partition column.
         """
-        conditions = self._extract_conditions_from_tree(where.this, table_name, column_name)
-        
-        # Check if the conditions are properly ANDed or if there's problematic OR usage
-        if conditions and self._has_or_between_partition_conditions(where.this, table_name, column_name):
-            # If there's an OR between partition conditions, we need to be more careful
-            # Mark this by returning a special marker or handle it differently
-            # For now, we'll let the conditions through but the range check will fail
-            pass
-        
-        return conditions
+        return self._extract_conditions_from_tree(where.this, table_name, column_name)
 
     def _has_or_between_partition_conditions(
         self, node: exp.Expression, table_name: str, column_name: str
@@ -405,27 +402,25 @@ class PartitionChecker:
             # Check if both sides have partition conditions
             left_has = self._subtree_references_column(node.this, table_name, column_name)
             right_has = self._subtree_references_column(node.expression, table_name, column_name)
-            
+
             if left_has and right_has:
                 # Both sides reference the partition column
                 # Check if all partition conditions are equality conditions
                 left_conditions = self._extract_conditions_from_tree(node.this, table_name, column_name)
                 right_conditions = self._extract_conditions_from_tree(node.expression, table_name, column_name)
                 all_conditions = left_conditions + right_conditions
-                
-                # If all conditions are equality, this is acceptable (e.g., day = X OR day = Y)
-                if all_conditions and all(isinstance(c, exp.EQ) for c in all_conditions):
-                    return False
-                
-                # Otherwise, OR between partition conditions is problematic
-                return True
-        
+
+                # Equality ORs are acceptable (e.g., day = X OR day = Y) as they select specific partitions
+                all_are_equality = all_conditions and all(isinstance(c, exp.EQ) for c in all_conditions)
+                # Range ORs are problematic (e.g., day >= X OR day <= Y) as they create infinite ranges
+                return not all_are_equality
+
         # Recursively check children
         if isinstance(node, (exp.And, exp.Or)):
             left_has_or = self._has_or_between_partition_conditions(node.this, table_name, column_name)
             right_has_or = self._has_or_between_partition_conditions(node.expression, table_name, column_name)
             return left_has_or or right_has_or
-        
+
         return False
 
     def _subtree_references_column(
@@ -634,9 +629,8 @@ class PartitionChecker:
             for column_name in conditions_by_column:
                 if has_or_by_column.get(column_name, False):
                     # OR between partition conditions makes the range effectively infinite
-                    # Return a very large value (100 years in seconds)
-                    return 100 * 365.25 * 24 * 3600
-        
+                    return INFINITE_RANGE_SECONDS
+
         # Extract value ranges for each partition level
         values_by_column = {}
         for date_partition in date_partitions:

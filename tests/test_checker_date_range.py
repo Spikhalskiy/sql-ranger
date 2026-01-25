@@ -1,8 +1,6 @@
 """Tests for date range estimations in partition_checker module."""
 from datetime import timedelta
 
-import pytest
-
 from sqlranger.checker import (
     DatePartitionColumn,
     DateTablePartition,
