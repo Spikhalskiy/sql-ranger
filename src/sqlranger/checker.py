@@ -410,8 +410,12 @@ class PartitionChecker:
                 right_conditions = self._extract_conditions_from_tree(node.expression, table_name, column_name)
                 all_conditions = left_conditions + right_conditions
 
+                # If we couldn't extract conditions, treat as problematic OR
+                if not all_conditions:
+                    return True
+
                 # Equality ORs are acceptable (e.g., day = X OR day = Y) as they select specific partitions
-                all_are_equality = all_conditions and all(isinstance(c, exp.EQ) for c in all_conditions)
+                all_are_equality = all(isinstance(c, exp.EQ) for c in all_conditions)
                 # Range ORs are problematic (e.g., day >= X OR day <= Y) as they create infinite ranges
                 return not all_are_equality
 
