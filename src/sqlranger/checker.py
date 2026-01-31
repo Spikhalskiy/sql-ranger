@@ -11,6 +11,11 @@ from enum import Enum
 import sqlglot
 from sqlglot import exp
 
+# When OR operators separate partition conditions (e.g., day >= X OR day <= Y),
+# the effective range is infinite. We use a very large value (100 years in seconds)
+# to represent this for range estimation, which will trigger EXCESSIVE_DATE_RANGE.
+INFINITE_RANGE_SECONDS = 100 * 365.25 * 24 * 3600
+
 
 @dataclass
 class DatePartitionColumn:
@@ -270,7 +275,10 @@ class PartitionChecker:
                         table_name=table_name,
                     )
 
-            # Check for finite range
+            # Check for finite range (e.g., BETWEEN, =, or both >= and <=)
+            # Note: OR operators between partition conditions are detected later during
+            # range estimation for DateTablePartition, where they trigger EXCESSIVE_DATE_RANGE.
+            # For basic TablePartition, OR conditions still allow the partition filter check to pass.
             if not self._has_finite_range(partition_conditions):
                 return PartitionViolation(
                     violation=PartitionViolationType.NO_FINITE_RANGE,
@@ -285,34 +293,19 @@ class PartitionChecker:
         if (isinstance(partition_config, DateTablePartition)
             and partition_config.max_date_range is not None
             and enforced_partitions):
-            # Collect conditions for each enforced partition column
-            conditions_by_column = {}
-            for column_name in enforced_partitions:
-                column_conditions = []
-                for where in where_clauses:
-                    conditions = self._extract_partition_conditions(where, table_name, column_name)
-                    column_conditions.extend(conditions)
-                conditions_by_column[column_name] = column_conditions
-
-            # Estimate the time range from all partition levels combined
-            estimated_seconds = self._estimate_hierarchical_time_range(
-                conditions_by_column, partition_config.date_partitions
-            )
-
+            # Walk the WHERE clause tree and calculate ranges for each subtree
             max_seconds = partition_config.max_date_range.total_seconds()
-            if estimated_seconds is not None and estimated_seconds > max_seconds:
-                estimated_range = timedelta(seconds=estimated_seconds)
-                estimated_str = self._format_time_range(estimated_seconds)
-                max_str = self._format_time_range(max_seconds)
-                return PartitionViolation(
-                    violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
-                    message=(
-                        f"Table '{table_name}' has an excessive date range of approximately "
-                        f"{estimated_str} (max: {max_str})"
-                    ),
-                    table_name=table_name,
-                    estimated_range=estimated_range,
+
+            for where in where_clauses:
+                # Calculate the range for this WHERE clause by walking the tree
+                violation = self._check_tree_range(
+                    where.this,
+                    table_name,
+                    partition_config.date_partitions,
+                    max_seconds
                 )
+                if violation:
+                    return violation
 
         return None
 
@@ -346,11 +339,206 @@ class PartitionChecker:
         # No violations found - return empty list
         return results
 
+    def _check_tree_range(
+        self,
+        node: exp.Expression,
+        table_name: str,
+        date_partitions: list,
+        max_seconds: float,
+    ) -> PartitionViolation | None:
+        """
+        Check date range by walking the expression tree recursively.
+
+        For OR nodes, each branch must independently satisfy the range constraint.
+        The total range is the union of all branches.
+
+        Args:
+            node: Expression node to check (typically the WHERE clause body).
+            table_name: Name of the table being checked.
+            date_partitions: List of DatePartitionColumn objects.
+            max_seconds: Maximum allowed range in seconds.
+
+        Returns:
+            PartitionViolation if any subtree exceeds the max range, None otherwise.
+        """
+        estimated_seconds = self._calculate_tree_range(node, table_name, date_partitions)
+
+        if estimated_seconds is not None and estimated_seconds > max_seconds:
+            estimated_range = timedelta(seconds=estimated_seconds)
+            estimated_str = self._format_time_range(estimated_seconds)
+            max_str = self._format_time_range(max_seconds)
+            return PartitionViolation(
+                violation=PartitionViolationType.EXCESSIVE_DATE_RANGE,
+                message=(
+                    f"Table '{table_name}' has an excessive date range of approximately "
+                    f"{estimated_str} (max: {max_str})"
+                ),
+                table_name=table_name,
+                estimated_range=estimated_range,
+            )
+
+        return None
+
+    def _calculate_tree_range(
+        self,
+        node: exp.Expression,
+        table_name: str,
+        date_partitions: list,
+    ) -> float | None:
+        """
+        Calculate the date range for an expression tree node recursively.
+
+        Args:
+            node: Expression node to analyze.
+            table_name: Name of the table.
+            date_partitions: List of DatePartitionColumn objects.
+
+        Returns:
+            Estimated range in seconds, or None if cannot be estimated.
+            Returns INFINITE_RANGE_SECONDS for truly infinite ranges (e.g., day >= X OR day <= Y).
+        """
+        # Handle OR nodes: calculate range for each branch
+        if isinstance(node, exp.Or):
+            left_range = self._calculate_tree_range(node.this, table_name, date_partitions)
+            right_range = self._calculate_tree_range(node.expression, table_name, date_partitions)
+
+            # Check if both branches have partition conditions
+            left_has_conditions = self._has_partition_conditions(node.this, table_name, date_partitions)
+            right_has_conditions = self._has_partition_conditions(node.expression, table_name, date_partitions)
+
+            # If neither branch has partition conditions, return None (no range to check)
+            if not left_has_conditions and not right_has_conditions:
+                return None
+
+            # If only one branch has partition conditions, use that branch's range
+            # (the other branch doesn't add to the date range we're checking)
+            if left_has_conditions and not right_has_conditions:
+                return left_range
+            if right_has_conditions and not left_has_conditions:
+                return right_range
+
+            # Both branches have partition conditions
+            # If either branch is infinite/None, the whole OR is infinite
+            if left_range is None or right_range is None:
+                return INFINITE_RANGE_SECONDS
+
+            # If both branches are finite, return the maximum (union of ranges)
+            return max(left_range, right_range)
+
+        # Handle AND nodes: calculate range for the combined conditions
+        if isinstance(node, exp.And):
+            # For AND, we need to collect all conditions and calculate their intersection
+            conditions_by_column = {}
+            for date_partition in date_partitions:
+                column_name = date_partition.column_name
+                conditions = self._extract_conditions_from_tree(node, table_name, column_name)
+                if conditions:
+                    conditions_by_column[column_name] = conditions
+
+            if not conditions_by_column:
+                # No partition conditions found
+                return None
+
+            # Calculate range from the collected conditions
+            return self._estimate_range_from_conditions(conditions_by_column, date_partitions)
+
+        # For leaf nodes (comparisons), extract conditions and calculate range
+        conditions_by_column = {}
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            conditions = self._extract_conditions_from_tree(node, table_name, column_name)
+            if conditions:
+                conditions_by_column[column_name] = conditions
+
+        if not conditions_by_column:
+            # No partition conditions found
+            return None
+
+        return self._estimate_range_from_conditions(conditions_by_column, date_partitions)
+
+    def _has_partition_conditions(
+        self,
+        node: exp.Expression,
+        table_name: str,
+        date_partitions: list,
+    ) -> bool:
+        """
+        Check if a node has any partition column conditions.
+
+        Args:
+            node: Expression node to check.
+            table_name: Name of the table.
+            date_partitions: List of DatePartitionColumn objects.
+
+        Returns:
+            True if the node references any partition column, False otherwise.
+        """
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            conditions = self._extract_conditions_from_tree(node, table_name, column_name)
+            if conditions:
+                return True
+        return False
+
+    def _estimate_range_from_conditions(
+        self,
+        conditions_by_column: dict[str, list[exp.Expression]],
+        date_partitions: list,
+    ) -> float | None:
+        """
+        Estimate date range from a set of conditions.
+
+        This is similar to the original _estimate_hierarchical_time_range but without
+        the OR detection logic (that's now handled in tree walking).
+
+        Args:
+            conditions_by_column: Dictionary mapping column names to their conditions.
+            date_partitions: List of DatePartitionColumn objects.
+
+        Returns:
+            Estimated range in seconds, or None if cannot be estimated.
+        """
+        # Extract value ranges for each partition level
+        values_by_column = {}
+        for date_partition in date_partitions:
+            column_name = date_partition.column_name
+            conditions = conditions_by_column.get(column_name, [])
+            if not conditions:
+                continue
+
+            min_val, max_val = self._extract_value_range(conditions)
+            values_by_column[column_name] = (min_val, max_val)
+
+        if not values_by_column:
+            return None
+
+        # Build datetime objects from the extracted values
+        try:
+            start_time = self._build_datetime_from_partitions(
+                values_by_column, date_partitions, use_min=True
+            )
+            end_time = self._build_datetime_from_partitions(
+                values_by_column, date_partitions, use_min=False
+            )
+
+            if start_time and end_time:
+                delta = end_time - start_time
+                return delta.total_seconds()
+
+        except (ValueError, TypeError):
+            pass
+
+        return None
+
     def _extract_partition_conditions(
         self, where: exp.Where, table_name: str, column_name: str
     ) -> list[exp.Expression]:
         """
         Extract conditions involving the partition column from a WHERE clause.
+
+        This method walks the expression tree and extracts conditions that are properly
+        ANDed together. If partition column conditions are separated by OR operators,
+        they are still returned but additional validation is needed.
 
         Args:
             where: WHERE clause expression.
@@ -360,13 +548,35 @@ class PartitionChecker:
         Returns:
             List of expressions that reference the partition column.
         """
-        partition_conditions = []
+        return self._extract_conditions_from_tree(where.this, table_name, column_name)
 
-        # Find all comparison and BETWEEN expressions
-        for node in where.walk():
-            is_comparison = isinstance(node, (exp.EQ, exp.LT, exp.LTE, exp.GT, exp.GTE, exp.Between))
-            if is_comparison and self._references_column_of_table(node, table_name, column_name):
-                partition_conditions.append(node)
+    def _extract_conditions_from_tree(
+        self, node: exp.Expression, table_name: str, column_name: str
+    ) -> list[exp.Expression]:
+        """
+        Recursively extract partition conditions from an expression tree.
+
+        This extracts all conditions regardless of logical operators. The caller should
+        check if they're properly connected with AND operators.
+
+        Args:
+            node: Expression node to process.
+            table_name: Name of the table to extract the partition conditions for.
+            column_name: Name of the partition column.
+
+        Returns:
+            List of partition column conditions found in the tree.
+        """
+        # Base case: if this is a comparison that references our column, return it
+        is_comparison = isinstance(node, (exp.EQ, exp.LT, exp.LTE, exp.GT, exp.GTE, exp.Between))
+        if is_comparison and self._references_column_of_table(node, table_name, column_name):
+            return [node]
+
+        # Recursively collect from all children
+        partition_conditions = []
+        for child in node.iter_expressions():
+            conditions = self._extract_conditions_from_tree(child, table_name, column_name)
+            partition_conditions.extend(conditions)
 
         return partition_conditions
 
@@ -497,61 +707,6 @@ class PartitionChecker:
         # 1 day or more - show in days
         days = seconds / 86400
         return f"{days:.1f} days" if days != 1 else "1 day"
-
-    def _estimate_hierarchical_time_range(
-        self,
-        conditions_by_column: dict[str, list[exp.Expression]],
-        date_partitions: list,
-    ) -> float | None:
-        """
-        Estimate time range from hierarchical date partition conditions.
-
-        This function handles all levels of date/time partitions uniformly by:
-        1. Extracting min/max values from all partition levels
-        2. Building start and end times from the combined values
-        3. Calculating the time difference in seconds
-
-        Args:
-            conditions_by_column: Dictionary mapping column names to their conditions
-            date_partitions: List of DatePartitionColumn objects with format info
-
-        Returns:
-            Estimated range in seconds, or None if cannot be estimated
-        """
-        # Extract value ranges for each partition level
-        values_by_column = {}
-        for date_partition in date_partitions:
-            column_name = date_partition.column_name
-            conditions = conditions_by_column.get(column_name, [])
-            if not conditions:
-                continue
-
-            min_val, max_val = self._extract_value_range(conditions)
-            values_by_column[column_name] = (min_val, max_val)
-
-        if not values_by_column:
-            return None
-
-        # Build datetime objects from the extracted values
-        # We need to determine start and end times from all partition levels
-        try:
-            start_time = self._build_datetime_from_partitions(
-                values_by_column, date_partitions, use_min=True
-            )
-            end_time = self._build_datetime_from_partitions(
-                values_by_column, date_partitions, use_min=False
-            )
-
-            if start_time and end_time:
-                # Calculate the difference
-                delta = end_time - start_time
-                return delta.total_seconds()
-
-        except (ValueError, TypeError):
-            # If we can't build valid datetimes, fall back to None
-            pass
-
-        return None
 
     def _extract_value_range(self, conditions: list[exp.Expression]) -> tuple[str | None, str | None]:
         """

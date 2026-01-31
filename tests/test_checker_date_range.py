@@ -1,8 +1,6 @@
 """Tests for date range estimations in partition_checker module."""
 from datetime import timedelta
 
-import pytest
-
 from sqlranger.checker import (
     DatePartitionColumn,
     DateTablePartition,
@@ -212,7 +210,6 @@ class TestDateRangeEstimation:
         assert sales_result.violation == PartitionViolationType.EXCESSIVE_DATE_RANGE
 
 
-    @pytest.mark.skip("https://github.com/Spikhalskiy/sql-ranger/issues/12")
     def test_processes_simple_or_correctly(self):
         """
         Test query with a simple OR. This test is making sure that expressions are processed as a tree,
